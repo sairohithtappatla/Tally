@@ -1,4 +1,4 @@
-import React, { useState } from 'react';
+import React, { useState, useEffect } from 'react';
 import {
   View,
   Text,
@@ -12,6 +12,7 @@ import {
   KeyboardAvoidingView,
   Platform,
   Pressable,
+  ActivityIndicator,
 } from 'react-native';
 import { Ionicons, Feather } from '@expo/vector-icons';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
@@ -19,6 +20,9 @@ import { LinearGradient } from 'expo-linear-gradient';
 import { router } from 'expo-router';
 import * as ImagePicker from 'expo-image-picker';
 import { Alert } from 'react-native';
+import { useAuth } from '@/contexts/AuthContext';
+import { alertService } from '@/services/alertService';
+import { supabase } from '@/services/supabaseClient';
 
 const { width: SCREEN_WIDTH } = Dimensions.get('window');
 
@@ -27,12 +31,20 @@ const DEFAULT_AVATAR = 'https://ui-avatars.com/api/?name=User&background=6366F1&
 
 export default function SettingsScreen() {
   const insets = useSafeAreaInsets();
+  const { user, logout } = useAuth();
 
   // -- User State --
-  const [name, setName] = useState('Sai Rohith');
+  const [name, setName] = useState('');
   const [profileImage, setProfileImage] = useState(DEFAULT_AVATAR);
   const [isEditing, setIsEditing] = useState(false);
-  const [tempName, setTempName] = useState(name);
+  const [tempName, setTempName] = useState('');
+  const [uploadingImage, setUploadingImage] = useState(false);
+
+  // -- Budget State --
+  const [monthlyBudget, setMonthlyBudget] = useState(0);
+  const [isBudgetModalVisible, setBudgetModalVisible] = useState(false);
+  const [tempBudget, setTempBudget] = useState('');
+  const [savingBudget, setSavingBudget] = useState(false);
 
   // -- UI State --
   const [isLogoutModalVisible, setLogoutModalVisible] = useState(false);
@@ -41,6 +53,36 @@ export default function SettingsScreen() {
   const [isSuccessToastVisible, setSuccessToastVisible] = useState(false);
   const [isAboutModalVisible, setAboutModalVisible] = useState(false);
   const [toastMessage, setToastMessage] = useState('');
+
+  useEffect(() => {
+    if (!user) return;
+
+    // Load profile (name, avatar, budget) from DB
+    const loadProfile = async () => {
+      const [budget, profile] = await Promise.all([
+        alertService.getMonthlyBudget(user.id),
+        supabase.from('user_profiles').select('name, avatar_url').eq('id', user.id).single(),
+      ]);
+
+      setMonthlyBudget(budget);
+      setTempBudget(budget > 0 ? String(budget) : '');
+
+      if (profile.data) {
+        const dbName = profile.data.name || user.user_metadata?.name || user.email?.split('@')[0] || 'User';
+        setName(dbName);
+        setTempName(dbName);
+        if (profile.data.avatar_url) {
+          setProfileImage(profile.data.avatar_url);
+        } else {
+          // Generate initial-based avatar
+          const initials = encodeURIComponent(dbName);
+          setProfileImage(`https://ui-avatars.com/api/?name=${initials}&background=6366F1&color=fff&size=128`);
+        }
+      }
+    };
+
+    loadProfile();
+  }, [user]);
 
   const showToast = (msg: string) => {
     setToastMessage(msg);
@@ -56,11 +98,20 @@ export default function SettingsScreen() {
     setNameConfirmVisible(true);
   };
 
-  const confirmNameUpdate = () => {
-    setName(tempName.trim());
-    setIsEditing(false);
-    setNameConfirmVisible(false);
-    showToast('Name updated successfully');
+  const confirmNameUpdate = async () => {
+    const newName = tempName.trim();
+    try {
+      await supabase
+        .from('user_profiles')
+        .update({ name: newName })
+        .eq('id', user!.id);
+      setName(newName);
+      setIsEditing(false);
+      setNameConfirmVisible(false);
+      showToast('Name updated successfully');
+    } catch (e: any) {
+      Alert.alert('Error', 'Could not save name. Please try again.');
+    }
   };
 
   const pickImage = async () => {
@@ -74,14 +125,54 @@ export default function SettingsScreen() {
 
       const result = await ImagePicker.launchImageLibraryAsync({
         mediaTypes: ['images'],
-        allowsEditing: false,
-        quality: 0.8,
+        allowsEditing: true,
+        aspect: [1, 1],
+        quality: 0.7,
       });
 
       if (!result.canceled && result.assets && result.assets.length > 0) {
-        setProfileImage(result.assets[0].uri);
+        const localUri = result.assets[0].uri;
         setImageModalVisible(false);
-        showToast('Profile image updated');
+        setUploadingImage(true);
+
+        try {
+          // Fetch as blob (works on React Native for local file URIs)
+          const response = await fetch(localUri);
+          const blob = await response.blob();
+          const ext = localUri.split('.').pop()?.toLowerCase() || 'jpg';
+          const filePath = `${user!.id}/avatar.${ext}`;
+
+          const { error: uploadError } = await supabase.storage
+            .from('avatars')
+            .upload(filePath, blob, {
+              contentType: `image/${ext}`,
+              upsert: true,
+            });
+
+          if (uploadError) throw uploadError;
+
+          // Get permanent public URL
+          const { data: { publicUrl } } = supabase.storage
+            .from('avatars')
+            .getPublicUrl(filePath);
+
+          // Bust cache with timestamp
+          const cachedUrl = `${publicUrl}?t=${Date.now()}`;
+
+          // Save URL to user_profiles
+          await supabase
+            .from('user_profiles')
+            .update({ avatar_url: publicUrl })
+            .eq('id', user!.id);
+
+          setProfileImage(cachedUrl);
+          showToast('Profile picture saved!');
+        } catch (uploadErr: any) {
+          console.error('Upload failed:', uploadErr);
+          Alert.alert('Upload Failed', uploadErr.message || 'Could not upload image. Please try again.');
+        } finally {
+          setUploadingImage(false);
+        }
       }
     } catch (error) {
       Alert.alert('Error', 'An error occurred while picking the image.');
@@ -89,10 +180,46 @@ export default function SettingsScreen() {
     }
   };
 
-  const deleteImage = () => {
-    setProfileImage(DEFAULT_AVATAR);
-    setImageModalVisible(false);
-    showToast('Profile image removed');
+  const deleteImage = async () => {
+    try {
+      // Clear in DB
+      await supabase
+        .from('user_profiles')
+        .update({ avatar_url: null })
+        .eq('id', user!.id);
+
+      // Try to remove from storage (ignore error if not found)
+      const extensions = ['jpg', 'jpeg', 'png', 'webp'];
+      for (const ext of extensions) {
+        await supabase.storage.from('avatars').remove([`${user!.id}/avatar.${ext}`]);
+      }
+
+      const initials = encodeURIComponent(name || 'User');
+      setProfileImage(`https://ui-avatars.com/api/?name=${initials}&background=6366F1&color=fff&size=128`);
+      setImageModalVisible(false);
+      showToast('Profile picture removed');
+    } catch (e: any) {
+      Alert.alert('Error', 'Could not remove picture. Please try again.');
+    }
+  };
+
+  const handleUpdateBudget = async () => {
+    const val = parseFloat(tempBudget);
+    if (!tempBudget || isNaN(val) || val <= 0) {
+      Alert.alert('Invalid Amount', 'Please enter a valid budget amount greater than 0.');
+      return;
+    }
+    try {
+      setSavingBudget(true);
+      await alertService.updateMonthlyBudget(user!.id, val);
+      setMonthlyBudget(val);
+      setBudgetModalVisible(false);
+      showToast(`Monthly budget set to ₹${val.toLocaleString()}`);
+    } catch (e: any) {
+      Alert.alert('Error', e.message || 'Failed to update budget');
+    } finally {
+      setSavingBudget(false);
+    }
   };
 
   return (
@@ -111,11 +238,17 @@ export default function SettingsScreen() {
           <View style={styles.profileCard}>
             <View style={styles.avatarContainer}>
               <Image source={{ uri: profileImage }} style={styles.avatar} />
+              {uploadingImage && (
+                <View style={styles.avatarUploadOverlay}>
+                  <ActivityIndicator color="#FFF" size="small" />
+                </View>
+              )}
               <TouchableOpacity
                 style={styles.editImageBadge}
                 onPress={() => setImageModalVisible(true)}
+                disabled={uploadingImage}
               >
-                <Ionicons name="camera" size={16} color="#FFF" />
+                <Ionicons name={uploadingImage ? 'hourglass' : 'camera'} size={16} color="#FFF" />
               </TouchableOpacity>
             </View>
             <View style={styles.profileInfo}>
@@ -161,6 +294,27 @@ export default function SettingsScreen() {
             <Text style={styles.menuItemText}>
               Account linked
             </Text>
+            <Ionicons name="chevron-forward" size={18} color="#CBD5E1" />
+          </TouchableOpacity>
+
+          <TouchableOpacity
+            style={styles.menuItem}
+            onPress={() => {
+              setTempBudget(monthlyBudget > 0 ? String(monthlyBudget) : '');
+              setBudgetModalVisible(true);
+            }}
+          >
+            <View style={[styles.iconBox, { backgroundColor: '#FFF7ED' }]}>
+              <Ionicons name="pie-chart-outline" size={20} color="#F97316" />
+            </View>
+            <View style={{ flex: 1 }}>
+              <Text style={styles.menuItemText}>Monthly Budget</Text>
+              {monthlyBudget > 0 && (
+                <Text style={{ fontSize: 12, color: '#64748B', marginTop: 1 }}>
+                  ₹{monthlyBudget.toLocaleString()}/month
+                </Text>
+              )}
+            </View>
             <Ionicons name="chevron-forward" size={18} color="#CBD5E1" />
           </TouchableOpacity>
         </View>
@@ -215,9 +369,9 @@ export default function SettingsScreen() {
               </TouchableOpacity>
               <TouchableOpacity
                 style={styles.confirmLogoutBtn}
-                onPress={() => {
+                onPress={async () => {
                   setLogoutModalVisible(false);
-                  router.replace('/welcome');
+                  await logout();
                 }}
               >
                 <Text style={styles.confirmLogoutLabel}>Log Out</Text>
@@ -322,6 +476,49 @@ export default function SettingsScreen() {
           </LinearGradient>
         </View>
       )}
+
+      {/* Budget Edit Modal */}
+      <Modal visible={isBudgetModalVisible} transparent animationType="slide">
+        <KeyboardAvoidingView behavior={Platform.OS === 'ios' ? 'padding' : 'height'} style={{ flex: 1 }}>
+          <Pressable style={styles.modalOverlay} onPress={() => setBudgetModalVisible(false)}>
+            <Pressable style={[styles.modalContent, { width: '90%' }]} onPress={e => e.stopPropagation()}>
+              <View style={[styles.modalIconBox, { backgroundColor: '#FFF7ED' }]}>
+                <Ionicons name="pie-chart-outline" size={36} color="#F97316" />
+              </View>
+              <Text style={styles.modalTitle}>Monthly Budget</Text>
+              <Text style={styles.modalDescription}>
+                Set your total monthly spending limit. Alert notifications will fire at 50%, 80%, and 100%.
+              </Text>
+
+              <View style={styles.budgetInputRow}>
+                <Text style={styles.budgetCurrency}>₹</Text>
+                <TextInput
+                  style={styles.budgetInput}
+                  value={tempBudget}
+                  onChangeText={setTempBudget}
+                  keyboardType="numeric"
+                  placeholder="e.g. 10000"
+                  placeholderTextColor="#94A3B8"
+                  autoFocus
+                />
+              </View>
+
+              <View style={[styles.modalButtons, { marginTop: 20 }]}>
+                <TouchableOpacity style={styles.cancelModalBtn} onPress={() => setBudgetModalVisible(false)}>
+                  <Text style={styles.cancelModalLabel}>Cancel</Text>
+                </TouchableOpacity>
+                <TouchableOpacity
+                  style={[styles.confirmLogoutBtn, { backgroundColor: '#F97316', flex: 1, marginLeft: 10 }]}
+                  onPress={handleUpdateBudget}
+                  disabled={savingBudget}
+                >
+                  <Text style={styles.confirmLogoutLabel}>{savingBudget ? 'Saving...' : 'Save'}</Text>
+                </TouchableOpacity>
+              </View>
+            </Pressable>
+          </Pressable>
+        </KeyboardAvoidingView>
+      </Modal>
     </View>
   );
 }
@@ -387,6 +584,17 @@ const styles = StyleSheet.create({
     alignItems: 'center',
     borderWidth: 3,
     borderColor: '#F8FAFC',
+  },
+  avatarUploadOverlay: {
+    position: 'absolute',
+    top: 0,
+    left: 0,
+    right: 0,
+    bottom: 0,
+    borderRadius: 45,
+    backgroundColor: 'rgba(0,0,0,0.45)',
+    justifyContent: 'center',
+    alignItems: 'center',
   },
   profileInfo: {
     marginLeft: 20,
@@ -679,5 +887,29 @@ const styles = StyleSheet.create({
     color: '#FFF',
     fontSize: 14,
     fontWeight: '700',
+  },
+  budgetInputRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    borderWidth: 1.5,
+    borderColor: '#E2E8F0',
+    borderRadius: 16,
+    paddingHorizontal: 16,
+    backgroundColor: '#F8FAFC',
+    width: '100%',
+    marginBottom: 4,
+  },
+  budgetCurrency: {
+    fontSize: 20,
+    fontWeight: '700',
+    color: '#F97316',
+    marginRight: 8,
+  },
+  budgetInput: {
+    flex: 1,
+    fontSize: 20,
+    fontWeight: '600',
+    color: '#0F172A',
+    paddingVertical: 14,
   },
 });

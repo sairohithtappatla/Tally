@@ -137,9 +137,9 @@ export function TabBar({ state, descriptors, navigation }: BottomTabBarProps) {
 
         const onPress = () => {
           if (route.name === 'add') {
-            // Trigger the transaction modal on the history page
+            // Open AddTransactionModal on home screen
             router.push({
-              pathname: '/(tabs)/transactions',
+              pathname: '/',
               params: { openModal: 'true' }
             });
             return;

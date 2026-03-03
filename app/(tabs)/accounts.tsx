@@ -1,8 +1,12 @@
-import React, { useState, useEffect } from 'react';
-import { View, Text, StyleSheet, ScrollView, Animated, Modal, TextInput, Alert, Pressable } from 'react-native';
+import React, { useState, useEffect, useCallback } from 'react';
+import { View, Text, StyleSheet, ScrollView, Animated, Modal, TextInput, Alert, Pressable, ActivityIndicator, TouchableOpacity } from 'react-native';
 import { Ionicons } from '@expo/vector-icons';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { LinearGradient } from 'expo-linear-gradient';
+import { useFocusEffect } from '@react-navigation/native';
+import { useAuth } from '@/contexts/AuthContext';
+import { accountService } from '@/services/accountService';
+import { Account as SupabaseAccount } from '@/types/supabase';
 
 // --- TYPES ---
 type AccountType = 'savings' | 'expense';
@@ -94,11 +98,10 @@ const SuccessToast = ({ visible, message }: { visible: boolean; message: string 
 
 export default function AccountsScreen() {
   const insets = useSafeAreaInsets();
+  const { user } = useAuth();
 
-  const [accounts, setAccounts] = useState<Account[]>([
-    { id: '1', name: 'SBI Savings', balance: 4484.00, subtitle: '**** 4829', icon: 'business-outline', iconColor: '#6366F1', type: 'savings' },
-    { id: '2', name: 'Union Bank', balance: 12250.50, subtitle: '**** 9102', icon: 'card-outline', iconColor: '#0EA5E9', type: 'expense' },
-  ]);
+  const [accounts, setAccounts] = useState<Account[]>([]);
+  const [loading, setLoading] = useState(true);
 
   const [isEditModalVisible, setIsEditModalVisible] = useState(false);
   const [isAddModalVisible, setIsAddModalVisible] = useState(false);
@@ -110,6 +113,49 @@ export default function AccountsScreen() {
   const [editName, setEditName] = useState('');
   const [editBalance, setEditBalance] = useState('');
   const [editType, setEditType] = useState<AccountType>('savings');
+  const [editIcon, setEditIcon] = useState('card-outline');
+  const [editColor, setEditColor] = useState('#6366F1');
+
+  useEffect(() => {
+    if (user) {
+      loadAccounts();
+    }
+  }, [user]);
+
+  // Reload whenever the screen comes back into focus (e.g. after adding a transaction)
+  useFocusEffect(
+    useCallback(() => {
+      if (user) {
+        loadAccounts();
+      }
+    }, [user])
+  );
+
+  const loadAccounts = async () => {
+    try {
+      setLoading(true);
+      const data = await accountService.getAccounts(user!.id);
+      const formattedAccounts = data.map(acc => ({
+        id: acc.id,
+        name: acc.name,
+        balance: acc.balance,
+        subtitle: '',
+        icon: acc.icon || 'card-outline',
+        iconColor: acc.color || '#6366F1',
+        type: acc.type as AccountType
+      }));
+      // Sort: expense type first, then savings/others
+      formattedAccounts.sort((a, b) =>
+        a.type === 'expense' ? -1 : b.type === 'expense' ? 1 : 0
+      );
+      setAccounts(formattedAccounts);
+    } catch (error) {
+      console.error('Failed to load accounts:', error);
+      Alert.alert('Error', 'Failed to load accounts');
+    } finally {
+      setLoading(false);
+    }
+  };
 
   const showToast = (message: string) => {
     setToastMessage(message);
@@ -122,20 +168,35 @@ export default function AccountsScreen() {
     setEditName(account.name);
     setEditBalance(account.balance.toString());
     setEditType(account.type);
+    setEditIcon(account.icon);
+    setEditColor(account.iconColor);
     setIsEditModalVisible(true);
   };
 
-  const handleUpdateAccount = () => {
+  const handleUpdateAccount = async () => {
     if (!selectedAccount) return;
     const numBalance = parseFloat(editBalance.replace(/,/g, '')) || 0;
 
-    setAccounts(accounts.map(acc =>
-      acc.id === selectedAccount.id
-        ? { ...acc, name: editName, balance: numBalance, type: editType }
-        : acc
-    ));
-    setIsEditModalVisible(false);
-    showToast('Account updated successfully');
+    try {
+      await accountService.updateAccount(selectedAccount.id, {
+        name: editName,
+        type: editType,
+        icon: editIcon,
+        color: editColor
+      });
+
+      // Directly set the balance to what the user entered (avoids float diff issues)
+      if (numBalance !== selectedAccount.balance) {
+        await accountService.updateBalance(selectedAccount.id, numBalance, 'set');
+      }
+
+      await loadAccounts();
+      setIsEditModalVisible(false);
+      showToast('Account updated successfully');
+    } catch (error) {
+      console.error('Failed to update account:', error);
+      Alert.alert('Error', 'Failed to update account');
+    }
   };
 
   const handleDeleteAccount = () => {
@@ -148,45 +209,67 @@ export default function AccountsScreen() {
         {
           text: "Delete",
           style: "destructive",
-          onPress: () => {
-            setAccounts(accounts.filter(acc => acc.id !== selectedAccount.id));
-            setIsEditModalVisible(false);
-            showToast('Account deleted');
+          onPress: async () => {
+            try {
+              await accountService.deleteAccount(selectedAccount.id);
+              await loadAccounts();
+              setIsEditModalVisible(false);
+              showToast('Account deleted');
+            } catch (error) {
+              console.error('Failed to delete account:', error);
+              Alert.alert('Error', 'Failed to delete account');
+            }
           }
         }
       ]
     );
   };
 
-  const handleAddAccount = () => {
-    const newId = Date.now().toString();
+  const handleAddAccount = async () => {
     const numBalance = parseFloat(editBalance.replace(/,/g, '')) || 0;
 
-    const newAccount: Account = {
-      id: newId,
-      name: editName || 'New Account',
-      balance: numBalance,
-      subtitle: '**** ' + Math.floor(1000 + Math.random() * 9000),
-      icon: 'card-outline',
-      iconColor: accounts.length % 2 === 0 ? '#6366F1' : '#0EA5E9',
-      type: editType
-    };
-    setAccounts([...accounts, newAccount]);
-    setIsAddModalVisible(false);
-    resetForm();
-    showToast('New account added');
+    try {
+      await accountService.addAccount(user!.id, {
+        name: editName || 'New Account',
+        balance: numBalance,
+        type: editType,
+        icon: editIcon,
+        color: editColor
+      });
+
+      await loadAccounts();
+      setIsAddModalVisible(false);
+      resetForm();
+      showToast('New account added');
+    } catch (error) {
+      console.error('Failed to add account:', error);
+      Alert.alert('Error', 'Failed to add account');
+    }
   };
 
   const resetForm = () => {
     setEditName('');
     setEditBalance('');
     setEditType('savings');
+    setEditIcon('card-outline');
+    setEditColor('#6366F1');
   };
+
+  if (loading) {
+    return (
+      <View style={[styles.mainContainer, { paddingTop: insets.top, justifyContent: 'center', alignItems: 'center' }]}>
+        <ActivityIndicator size="large" color="#6366F1" />
+        <Text style={{ marginTop: 10, color: '#64748B' }}>Loading accounts...</Text>
+      </View>
+    );
+  }
 
   const savingsAccounts = accounts.filter(a => a.type === 'savings');
   const expenseAccounts = accounts.filter(a => a.type === 'expense');
 
-  const totalWorth = accounts.reduce((sum, acc) => sum + acc.balance, 0);
+  const totalSavings = savingsAccounts.reduce((sum, acc) => sum + Number(acc.balance), 0);
+  const totalExpenses = expenseAccounts.reduce((sum, acc) => sum + Number(acc.balance), 0);
+  const netWorth = totalSavings + totalExpenses;
 
   return (
     <View style={[styles.mainContainer, { paddingTop: insets.top }]}>
@@ -218,11 +301,21 @@ export default function AccountsScreen() {
           style={styles.netWorthCard}
         >
           <Text style={styles.netWorthLabel}>Net Worth</Text>
-          <Text style={styles.netWorthAmount}>₹{totalWorth.toLocaleString('en-IN', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}</Text>
-          <View style={styles.changeIndicator}>
-            <Ionicons name="shield-checkmark" size={14} color="#FFFFFF" />
-            <Text style={styles.changeText}>Securely Synced</Text>
+          <Text style={styles.netWorthAmount}>₹{netWorth.toLocaleString('en-IN', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}</Text>
+          <View style={styles.netWorthBreakdown}>
+            <View style={styles.breakdownItem}>
+              <Ionicons name="wallet-outline" size={13} color="rgba(255,255,255,0.7)" />
+              <Text style={styles.breakdownLabel}>Savings</Text>
+              <Text style={styles.breakdownValue}>₹{totalSavings.toLocaleString('en-IN', { minimumFractionDigits: 2 })}</Text>
+            </View>
+            <View style={styles.breakdownDivider} />
+            <View style={styles.breakdownItem}>
+              <Ionicons name="card-outline" size={13} color="rgba(255,255,255,0.7)" />
+              <Text style={styles.breakdownLabel}>Expense Accs</Text>
+              <Text style={styles.breakdownValue}>₹{totalExpenses.toLocaleString('en-IN', { minimumFractionDigits: 2 })}</Text>
+            </View>
           </View>
+          
         </LinearGradient>
 
         {/* ACCOUNT GROUP SECTIONS */}
@@ -488,6 +581,39 @@ const styles = StyleSheet.create({
     fontSize: 32,
     fontWeight: '700',
     marginBottom: 12,
+  },
+  netWorthBreakdown: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    backgroundColor: 'rgba(255,255,255,0.12)',
+    borderRadius: 14,
+    paddingVertical: 10,
+    paddingHorizontal: 16,
+    marginBottom: 12,
+    gap: 4,
+  },
+  breakdownItem: {
+    flex: 1,
+    alignItems: 'center',
+    gap: 3,
+  },
+  breakdownDivider: {
+    width: 1,
+    height: 32,
+    backgroundColor: 'rgba(255,255,255,0.25)',
+    marginHorizontal: 8,
+  },
+  breakdownLabel: {
+    color: 'rgba(255,255,255,0.65)',
+    fontSize: 11,
+    fontWeight: '600',
+    textTransform: 'uppercase',
+    letterSpacing: 0.5,
+  },
+  breakdownValue: {
+    color: '#FFFFFF',
+    fontSize: 15,
+    fontWeight: '700',
   },
   changeIndicator: {
     flexDirection: 'row',

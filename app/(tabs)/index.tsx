@@ -1,13 +1,57 @@
-import React, { useState } from 'react';
-import { View, Text, StyleSheet, ScrollView, TouchableOpacity, FlatList, Dimensions, Image } from 'react-native';
-import { Ionicons, Feather } from '@expo/vector-icons';
+import React, { useState, useEffect, useCallback } from 'react';
+import { View, Text, StyleSheet, ScrollView, TouchableOpacity, FlatList, Dimensions, ActivityIndicator, RefreshControl, Alert } from 'react-native';
+import { Ionicons } from '@expo/vector-icons';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
-import { useRouter } from 'expo-router';
+import { useRouter, useLocalSearchParams } from 'expo-router';
+import { useFocusEffect } from '@react-navigation/native';
+import { useAuth } from '@/contexts/AuthContext';
+import { accountService } from '@/services/accountService';
+import { transactionService } from '@/services/transactionService';
+import { alertService } from '@/services/alertService';
+import { Account, Transaction, AlertLog } from '@/types/supabase';
+import AddTransactionModal from '@/components/AddTransactionModal';
+import AlertBanner from '@/components/AlertBanner';
+
+const CATEGORY_ICONS: { [key: string]: string } = {
+  'Food': 'restaurant',
+  'Transport': 'car',
+  'Shopping': 'cart',
+  'Health': 'heart',
+  'Entertainment': 'game-controller',
+  'Bills': 'receipt',
+  'Salary': 'cash',
+  'Gift': 'gift',
+  'Other': 'ellipsis-horizontal',
+};
+
+const CATEGORY_COLORS: { [key: string]: string } = {
+  'Food': '#FF9800',
+  'Transport': '#3B82F6',
+  'Shopping': '#EC4899',
+  'Health': '#FF4B55',
+  'Entertainment': '#8B5CF6',
+  'Bills': '#F59E0B',
+  'Salary': '#10B981',
+  'Gift': '#4CAF50',
+  'Other': '#6366F1',
+};
 
 export default function HomeScreen() {
   const insets = useSafeAreaInsets();
   const router = useRouter();
+  const params = useLocalSearchParams();
+  const { user } = useAuth();
   const [showBalance, setShowBalance] = useState(true);
+  const [loading, setLoading] = useState(true);
+  const [refreshing, setRefreshing] = useState(false);
+  const [accounts, setAccounts] = useState<Account[]>([]);
+  const [recentTransactions, setRecentTransactions] = useState<Transaction[]>([]);
+  const [todaySpent, setTodaySpent] = useState(0);
+  const [weekSpent, setWeekSpent] = useState(0);
+  const [totalBalance, setTotalBalance] = useState(0);
+  const [showAddModal, setShowAddModal] = useState(false);
+  const [pendingAlerts, setPendingAlerts] = useState<AlertLog[]>([]);
+  const [monthlyBudget, setMonthlyBudget] = useState(0);
 
   // Get current date
   const today = new Date();
@@ -17,30 +61,133 @@ export default function HomeScreen() {
   const { width: SCREEN_WIDTH } = Dimensions.get('window');
   const CARD_WIDTH = SCREEN_WIDTH - 40;
 
-  // Card Data
-  const cards = [
-    { id: '1', name: 'SBI', balance: 4484.00, color: '#6366F1', secondaryColor: '#4F46E5' },
-    { id: '2', name: 'UNION', balance: 12250.50, color: '#0EA5E9', secondaryColor: '#0284C7' },
-  ];
+  // Reload data when screen comes into focus
+  useFocusEffect(
+    useCallback(() => {
+      if (user) {
+        loadDashboardData();
+      }
+    }, [user])
+  );
 
-  // Mock data for transactions
-  const transactions = [
-    { id: '1', category: 'Health', sub: 'checkup fee', amount: '-₹25.00', date: '11 Dec', icon: 'heart', color: '#FF4B55' },
-    { id: '2', category: 'Income', sub: 'Gift from Family', amount: '+₹60.00', date: '10 Dec', icon: 'logo-usd', color: '#4CAF50' },
-    { id: '3', category: 'Clothing', sub: 'Winter Clothing', amount: '-₹20.40', date: '10 Dec', icon: 'shirt', color: '#8862F0' },
-  ];
+  // Listen for openModal param (triggered by TabBar + button)
+  useEffect(() => {
+    if (params.openModal === 'true') {
+      setShowAddModal(true);
+      router.setParams({ openModal: undefined });
+    }
+  }, [params.openModal]);
+
+  useEffect(() => {
+    if (user) {
+      loadDashboardData();
+    }
+  }, [user]);
+
+  const loadDashboardData = async () => {
+    try {
+      setLoading(true);
+
+      // Load accounts, transactions, and monthly budget in parallel
+      const [accountsData, transactionsData, budget] = await Promise.all([
+        accountService.getAccounts(user!.id),
+        transactionService.getTransactions(user!.id, 3),
+        alertService.getMonthlyBudget(user!.id),
+      ]);
+
+      setMonthlyBudget(budget);
+
+      // Sort accounts: expense type first, then others
+      const sortedAccounts = [...accountsData].sort((a, b) =>
+        a.type === 'expense' ? -1 : b.type === 'expense' ? 1 : 0
+      );
+
+      setAccounts(sortedAccounts);
+      setRecentTransactions(transactionsData);
+
+      // Calculate total balance from all accounts
+      const total = accountsData.reduce((sum, acc) => sum + Number(acc.balance), 0);
+      setTotalBalance(total);
+
+      // Calculate today's and week's spending
+      calculateSpending(transactionsData);
+    } catch (error) {
+      console.error('Failed to load dashboard:', error);
+      Alert.alert('Error', 'Failed to load dashboard data. Please try again.');
+    } finally {
+      setLoading(false);
+      setRefreshing(false);
+    }
+  };
+
+  const onRefresh = async () => {
+    setRefreshing(true);
+    await loadDashboardData();
+  };
+
+  const calculateSpending = (transactions: Transaction[]) => {
+    const now = new Date();
+    const todayStart = new Date(now.getFullYear(), now.getMonth(), now.getDate());
+    const weekStart = new Date(now.getTime() - 7 * 24 * 60 * 60 * 1000);
+
+    let todayTotal = 0;
+    let weekTotal = 0;
+
+    transactions.forEach(txn => {
+      if (txn.type === 'expense') {
+        const txnDate = new Date(txn.date);
+        if (txnDate >= todayStart) {
+          todayTotal += txn.amount;
+        }
+        if (txnDate >= weekStart) {
+          weekTotal += txn.amount;
+        }
+      }
+    });
+
+    setTodaySpent(todayTotal);
+    setWeekSpent(weekTotal);
+  };
+
+  const formatDate = (dateString: string) => {
+    if (!dateString) return 'N/A';
+    try {
+      const date = new Date(dateString);
+      if (isNaN(date.getTime())) return 'Invalid Date';
+      return date.toLocaleDateString('en-US', { day: 'numeric', month: 'short' });
+    } catch (error) {
+      return 'N/A';
+    }
+  };
+
+  if (loading) {
+    return (
+      <View style={[styles.mainContainer, { justifyContent: 'center', alignItems: 'center' }]}>
+        <ActivityIndicator size="large" color="#6366F1" />
+        <Text style={{ marginTop: 10, color: '#64748B' }}>Loading dashboard...</Text>
+      </View>
+    );
+  }
 
   return (
     <View style={styles.mainContainer}>
       <ScrollView
         showsVerticalScrollIndicator={false}
         contentContainerStyle={[styles.scrollContent, { paddingTop: insets.top + 10 }]}
+        refreshControl={
+          <RefreshControl
+            refreshing={refreshing}
+            onRefresh={onRefresh}
+            tintColor="#6366F1"
+            colors={['#6366F1']}
+          />
+        }
       >
         {/* Header Section */}
         <View style={styles.header}>
           <View>
             <Text style={styles.greetingText}>Hello,</Text>
-            <Text style={styles.nameText}>Sai Rohith</Text>
+            <Text style={styles.nameText}>{user?.user_metadata?.name || user?.email?.split('@')[0] || 'User'}</Text>
           </View>
           <TouchableOpacity style={styles.calendarButton}>
             <View style={styles.calendarHeader}>
@@ -54,67 +201,92 @@ export default function HomeScreen() {
 
         {/* Switchable Bank Cards Carousel */}
         <View style={styles.carouselContainer}>
-          <FlatList
-            data={cards}
-            horizontal
-            pagingEnabled
-            showsHorizontalScrollIndicator={false}
-            snapToInterval={SCREEN_WIDTH - 40 + 10}
-            decelerationRate="fast"
-            contentContainerStyle={{ gap: 10 }}
-            keyExtractor={(item) => item.id}
-            renderItem={({ item }) => (
-              <View style={[styles.bankCard, { backgroundColor: item.color, width: CARD_WIDTH }]}>
-                <View style={styles.cardTopRow}>
-                  <View style={styles.cardInfoLeft}>
-
-                    <Text style={styles.cardBalanceLabel}>Available Balance</Text>
-                  </View>
-                </View>
-
-                <View style={styles.balanceRow}>
-                  <Text style={styles.cardBalanceValue}>
-                    {showBalance ? `₹ ${item.balance.toLocaleString('en-IN', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}` : '••••••••'}
-                  </Text>
+          {accounts.length > 0 ? (
+            <>
+              <FlatList
+                data={accounts}
+                horizontal
+                pagingEnabled
+                showsHorizontalScrollIndicator={false}
+                snapToInterval={SCREEN_WIDTH - 40 + 10}
+                decelerationRate="fast"
+                contentContainerStyle={{ gap: 10 }}
+                keyExtractor={(item) => item.id}
+                renderItem={({ item }) => (
                   <TouchableOpacity
-                    onPress={() => setShowBalance(!showBalance)}
-                    style={styles.eyeBtnInside}
+                    activeOpacity={0.9}
+                    onPress={() => router.push('/accounts')}
                   >
-                    <Ionicons
-                      name={showBalance ? "eye-outline" : "eye-off-outline"}
-                      size={20}
-                      color="rgba(255,255,255,0.6)"
-                    />
-                  </TouchableOpacity>
-                </View>
+                    <View style={[styles.bankCard, { backgroundColor: item.color || '#6366F1', width: CARD_WIDTH }]}>
+                      <View style={styles.cardTopRow}>
+                        <View style={styles.cardInfoLeft}>
+                          <Text style={styles.cardBalanceLabel}>Available Balance</Text>
+                        </View>
+                      </View>
 
-                <View style={styles.cardBottomRow}>
-                  <View>
-                    <Text style={styles.holderLabel}>Card Holder</Text>
-                    <Text style={styles.holderName}>Sai Rohith</Text>
-                  </View>
-                  <View style={styles.bankNameWrapper}>
-                    <Text style={styles.bankNameText}>{item.name}</Text>
-                    <View style={styles.bankLogoCircles}>
-                      <View style={[styles.logoCircle, { backgroundColor: 'rgba(255,255,255,0.2)' }]} />
-                      <View style={[styles.logoCircle, { backgroundColor: 'rgba(255,255,255,0.4)', marginLeft: -12 }]} />
+                      <View style={styles.balanceRow}>
+                        <Text style={styles.cardBalanceValue}>
+                          {showBalance ? `₹ ${item.balance.toLocaleString('en-IN', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}` : '••••••••'}
+                        </Text>
+                        <TouchableOpacity
+                          onPress={() => setShowBalance(!showBalance)}
+                          style={styles.eyeBtnInside}
+                        >
+                          <Ionicons
+                            name={showBalance ? "eye-outline" : "eye-off-outline"}
+                            size={20}
+                            color="rgba(255,255,255,0.6)"
+                          />
+                        </TouchableOpacity>
+                      </View>
+
+                      <View style={styles.cardBottomRow}>
+                        <View>
+                          <Text style={styles.holderLabel}>Card Holder</Text>
+                          <Text style={styles.holderName}>{user?.user_metadata?.name || user?.email?.split('@')[0] || 'User'}</Text>
+                        </View>
+                        <View style={styles.bankNameWrapper}>
+                          <Text style={styles.bankNameText}>{item.name}</Text>
+                          <View style={styles.bankLogoCircles}>
+                            <View style={[styles.logoCircle, { backgroundColor: 'rgba(255,255,255,0.2)' }]} />
+                            <View style={[styles.logoCircle, { backgroundColor: 'rgba(255,255,255,0.4)', marginLeft: -12 }]} />
+                          </View>
+                        </View>
+                      </View>
                     </View>
-                  </View>
+                  </TouchableOpacity>
+                )}
+              />
+              {accounts.length > 1 && (
+                <View style={styles.accountIndicator}>
+                  <Text style={styles.accountIndicatorText}>
+                    Tap card to manage • {accounts.length} account{accounts.length > 1 ? 's' : ''}
+                  </Text>
                 </View>
-              </View>
-            )}
-          />
+              )}
+            </>
+          ) : (
+            <View style={[styles.bankCard, { backgroundColor: '#6366F1', width: CARD_WIDTH }]}>
+              <Text style={[styles.cardBalanceLabel, { textAlign: 'center' }]}>No accounts yet</Text>
+              <TouchableOpacity
+                style={{ backgroundColor: 'rgba(255,255,255,0.2)', padding: 12, borderRadius: 12, marginTop: 20 }}
+                onPress={() => router.push('/accounts')}
+              >
+                <Text style={{ color: '#FFF', textAlign: 'center', fontWeight: '600' }}>Add Account</Text>
+              </TouchableOpacity>
+            </View>
+          )}
         </View>
 
         {/* Quick Summary Boxes */}
         <View style={styles.summaryRow}>
           <View style={styles.summaryBox}>
             <Text style={styles.summaryLabel}>Today's spent</Text>
-            <Text style={styles.summaryValue}>₹ 45.00</Text>
+            <Text style={styles.summaryValue}>₹ {todaySpent.toFixed(2)}</Text>
           </View>
           <View style={styles.summaryBox}>
             <Text style={styles.summaryLabel}>This week</Text>
-            <Text style={styles.summaryValue}>₹ 420.00</Text>
+            <Text style={styles.summaryValue}>₹ {weekSpent.toFixed(2)}</Text>
           </View>
           <TouchableOpacity
             style={[styles.summaryBox, styles.viewMoreBox]}
@@ -134,31 +306,88 @@ export default function HomeScreen() {
         </View>
 
         <View style={styles.transactionsList}>
-          {transactions.map((item) => (
-            <View key={item.id} style={styles.transactionItem}>
-              <View style={[styles.iconBox, { backgroundColor: item.color + '15' }]}>
-                <Ionicons name={item.icon as any} size={22} color={item.color} />
-              </View>
-              <View style={styles.transactionInfo}>
-                <Text style={styles.categoryText}>{item.category}</Text>
-                <Text style={styles.subText}>{item.sub}</Text>
-              </View>
-              <View style={styles.transactionRight}>
-                <Text style={[
-                  styles.amountText,
-                  { color: item.amount.startsWith('+') ? '#4CAF50' : '#11181C' }
-                ]}>
-                  {item.amount}
-                </Text>
-                <Text style={styles.dateText}>{item.date}</Text>
-              </View>
+          {recentTransactions.length > 0 ? (
+            recentTransactions.map((item) => {
+              const icon = CATEGORY_ICONS[item.category] || 'ellipsis-horizontal';
+              const color = CATEGORY_COLORS[item.category] || '#6366F1';
+              const isIncome = item.type === 'income';
+              const amount = isIncome ? `+₹${item.amount}` : `-₹${item.amount}`;
+              const timeStr = item.time
+                ? (() => {
+                  const [h, m] = item.time.split(':').map(Number);
+                  const suffix = h >= 12 ? 'PM' : 'AM';
+                  return `${((h % 12) || 12)}:${String(m).padStart(2, '0')} ${suffix}`;
+                })()
+                : null;
+
+              return (
+                <TouchableOpacity
+                  key={item.id}
+                  style={styles.transactionItem}
+                  onPress={() => router.push('/transactions')}
+                  activeOpacity={0.7}
+                >
+                  <View style={[styles.iconBox, { backgroundColor: color + '15' }]}>
+                    <Ionicons name={icon as any} size={22} color={color} />
+                  </View>
+                  <View style={styles.transactionInfo}>
+                    <Text style={styles.categoryText}>{item.category}</Text>
+                    <Text style={styles.subText}>{item.merchant || item.type}</Text>
+                  </View>
+                  <View style={styles.transactionRight}>
+                    <Text style={[
+                      styles.amountText,
+                      { color: isIncome ? '#10B981' : '#11181C' }
+                    ]}>
+                      {amount}
+                    </Text>
+                    <Text style={styles.dateText}>
+                      {formatDate(item.date)}{timeStr ? `  ${timeStr}` : ''}
+                    </Text>
+                  </View>
+                </TouchableOpacity>
+              );
+            })
+          ) : (
+            <View style={[styles.transactionItem, { justifyContent: 'center' }]}>
+              <Text style={styles.subText}>No transactions yet</Text>
+              <TouchableOpacity
+                style={{ marginTop: 10 }}
+                onPress={() => setShowAddModal(true)}
+              >
+                <Text style={{ color: '#3B82F6', fontWeight: '600', fontSize: 14, left: 12, bottom: 2 }}>Add Transaction</Text>
+              </TouchableOpacity>
             </View>
-          ))}
+          )}
         </View>
 
         {/* Bottom Spacing for Floating Nav */}
         <View style={{ height: 120 }} />
       </ScrollView>
+
+      {/* Floating Add Button */}
+
+
+      {/* Add Transaction Modal */}
+      <AddTransactionModal
+        visible={showAddModal}
+        onClose={() => setShowAddModal(false)}
+        onSuccess={(newAlerts) => {
+          loadDashboardData();
+          if (newAlerts && newAlerts.length > 0) {
+            setPendingAlerts(newAlerts);
+          }
+        }}
+      />
+
+      {/* Alert Banner — budget threshold notifications */}
+      {pendingAlerts.length > 0 && (
+        <AlertBanner
+          alerts={pendingAlerts}
+          monthlyBudget={monthlyBudget}
+          onDismissAll={() => setPendingAlerts([])}
+        />
+      )}
     </View>
   );
 }
@@ -187,6 +416,21 @@ const styles = StyleSheet.create({
     fontWeight: '700',
     color: '#11181C',
     marginTop: 2,
+  },
+  totalBalanceContainer: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    marginTop: 6,
+  },
+  totalBalanceLabel: {
+    fontSize: 12,
+    color: '#64748B',
+    fontWeight: '500',
+  },
+  totalBalanceValue: {
+    fontSize: 14,
+    fontWeight: '700',
+    color: '#10B981',
   },
   calendarButton: {
     width: 48,
@@ -227,6 +471,15 @@ const styles = StyleSheet.create({
   },
   carouselContainer: {
     marginBottom: 20,
+  },
+  accountIndicator: {
+    alignItems: 'center',
+    marginTop: 10,
+  },
+  accountIndicatorText: {
+    fontSize: 12,
+    color: '#94A3B8',
+    fontWeight: '500',
   },
   bankCard: {
     height: 200,
@@ -375,6 +628,22 @@ const styles = StyleSheet.create({
   transactionsList: {
     gap: 12,
   },
+  fab: {
+    position: 'absolute',
+    bottom: 110,
+    right: 20,
+    width: 56,
+    height: 56,
+    borderRadius: 28,
+    backgroundColor: '#6366F1',
+    justifyContent: 'center',
+    alignItems: 'center',
+    shadowColor: '#6366F1',
+    shadowOffset: { width: 0, height: 6 },
+    shadowOpacity: 0.35,
+    shadowRadius: 10,
+    elevation: 8,
+  },
   transactionItem: {
     flexDirection: 'row',
     alignItems: 'center',
@@ -401,9 +670,9 @@ const styles = StyleSheet.create({
     color: '#11181C',
   },
   subText: {
-    fontSize: 13,
+    fontSize: 15,
     color: '#94A3B8',
-    marginTop: 2,
+    marginTop: 5,
   },
   transactionRight: {
     alignItems: 'flex-end',

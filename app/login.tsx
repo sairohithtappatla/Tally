@@ -1,19 +1,57 @@
 import React, { useState } from 'react';
-import { View, Text, StyleSheet, TextInput, TouchableOpacity, KeyboardAvoidingView, Platform, ScrollView, Image } from 'react-native';
+import { View, Text, StyleSheet, TextInput, TouchableOpacity, KeyboardAvoidingView, Platform, ScrollView, Image, Alert, ActivityIndicator } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { useRouter } from 'expo-router';
 import { Ionicons } from '@expo/vector-icons';
-import { LinearGradient } from 'expo-linear-gradient';
+import { useAuth } from '@/contexts/AuthContext';
 
 export default function LoginScreen() {
   const router = useRouter();
+  const { login, register } = useAuth();
   const [email, setEmail] = useState('');
   const [password, setPassword] = useState('');
+  const [name, setName] = useState('');
   const [showPassword, setShowPassword] = useState(false);
+  const [isRegister, setIsRegister] = useState(false);
+  const [loading, setLoading] = useState(false);
 
-  const handleLogin = () => {
-    // Simple fake login logic
-    router.replace('/(tabs)');
+  const handleLogin = async () => {
+    if (!email || !password) {
+      Alert.alert('Error', 'Please fill in all fields');
+      return;
+    }
+
+    try {
+      setLoading(true);
+      await login(email, password);
+      router.replace('/(tabs)');
+    } catch (error: any) {
+      Alert.alert('Login Failed', error.message || 'An error occurred during login');
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  const handleRegister = async () => {
+    if (!email || !password || !name) {
+      Alert.alert('Error', 'Please fill in all fields');
+      return;
+    }
+
+    if (password.length < 8) {
+      Alert.alert('Error', 'Password must be at least 8 characters long');
+      return;
+    }
+
+    try {
+      setLoading(true);
+      await register(email, password, name);
+      router.replace('/(tabs)');
+    } catch (error: any) {
+      Alert.alert('Registration Failed', error.message || 'An error occurred during registration');
+    } finally {
+      setLoading(false);
+    }
   };
 
   return (
@@ -37,14 +75,34 @@ export default function LoginScreen() {
               style={styles.logoImage}
             />
             <Text style={styles.appName}>Tally</Text>
-            <Text style={styles.headline}>Welcome back!</Text>
-            <Text style={styles.subtext}>Log in to your account and keep track of your money</Text>
+            <Text style={styles.headline}>{isRegister ? 'Create Account' : 'Welcome back!'}</Text>
+            <Text style={styles.subtext}>
+              {isRegister ? 'Sign up to start tracking your finances' : 'Log in to your account and keep track of your money'}
+            </Text>
           </View>
 
           {/* Form */}
           <View style={styles.form}>
+            {isRegister && (
+              <View style={styles.inputGroup}>
+                <Text style={styles.label}>Full Name</Text>
+                <View style={styles.inputWrapper}>
+                  <Ionicons name="person-outline" size={20} color="#94A3B8" />
+                  <TextInput
+                    style={styles.input}
+                    placeholder="John Doe"
+                    placeholderTextColor="#94A3B8"
+                    value={name}
+                    onChangeText={setName}
+                    autoCapitalize="words"
+                    autoCorrect={false}
+                  />
+                </View>
+              </View>
+            )}
+
             <View style={styles.inputGroup}>
-              <Text style={styles.label}>Email or Username</Text>
+              <Text style={styles.label}>Email</Text>
               <View style={styles.inputWrapper}>
                 <Ionicons name="mail-outline" size={20} color="#94A3B8" />
                 <TextInput
@@ -55,6 +113,7 @@ export default function LoginScreen() {
                   onChangeText={setEmail}
                   autoCapitalize="none"
                   autoCorrect={false}
+                  keyboardType="email-address"
                 />
               </View>
             </View>
@@ -82,16 +141,34 @@ export default function LoginScreen() {
               </View>
             </View>
 
-            <TouchableOpacity style={styles.forgotPassword}>
-              <Text style={styles.forgotPasswordText}>Forgot password?</Text>
+            {!isRegister && (
+              <TouchableOpacity style={styles.forgotPassword}>
+                <Text style={styles.forgotPasswordText}>Forgot password?</Text>
+              </TouchableOpacity>
+            )}
+
+            <TouchableOpacity
+              style={[styles.loginBtn, loading && styles.loginBtnDisabled]}
+              onPress={isRegister ? handleRegister : handleLogin}
+              disabled={loading}
+            >
+              {loading ? (
+                <ActivityIndicator color="#000" />
+              ) : (
+                <Text style={styles.loginBtnText}>{isRegister ? 'Sign Up' : 'Log In'}</Text>
+              )}
             </TouchableOpacity>
 
-            <TouchableOpacity style={styles.loginBtn} onPress={handleLogin}>
-              <Text style={styles.loginBtnText}>Log In</Text>
+            <TouchableOpacity
+              onPress={() => setIsRegister(!isRegister)}
+              style={styles.switchModeBtn}
+            >
+              <Text style={styles.switchModeText}>
+                {isRegister ? 'Already have an account? ' : "Don't have an account? "}
+                <Text style={styles.switchModeBold}>{isRegister ? 'Log In' : 'Sign Up'}</Text>
+              </Text>
             </TouchableOpacity>
           </View>
-
-
         </ScrollView>
       </KeyboardAvoidingView>
     </SafeAreaView>
@@ -213,9 +290,24 @@ const styles = StyleSheet.create({
     shadowRadius: 10,
     elevation: 4,
   },
+  loginBtnDisabled: {
+    opacity: 0.6,
+  },
   loginBtnText: {
     color: '#FFFFFF',
     fontSize: 16,
+    fontWeight: '700',
+  },
+  switchModeBtn: {
+    marginTop: 20,
+    alignItems: 'center',
+  },
+  switchModeText: {
+    color: '#64748B',
+    fontSize: 14,
+  },
+  switchModeBold: {
+    color: '#0F172A',
     fontWeight: '700',
   },
   footer: {

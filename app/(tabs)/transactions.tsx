@@ -16,11 +16,19 @@ import {
   Keyboard,
   Platform,
   KeyboardAvoidingView,
+  RefreshControl,
+  ActivityIndicator,
+  Alert,
 } from 'react-native';
 import { Ionicons, Feather } from '@expo/vector-icons';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { LinearGradient } from 'expo-linear-gradient';
 import { useRouter, useLocalSearchParams } from 'expo-router';
+import { useFocusEffect } from '@react-navigation/native';
+import { useAuth } from '@/contexts/AuthContext';
+import { transactionService } from '@/services/transactionService';
+import { accountService } from '@/services/accountService';
+import { Transaction as SupabaseTransaction, Account } from '@/types/supabase';
 
 const { width: SCREEN_WIDTH, height: SCREEN_HEIGHT } = Dimensions.get('window');
 const CARD_WIDTH = SCREEN_WIDTH - 40;
@@ -30,12 +38,14 @@ const SPACING = 10;
 interface Transaction {
   id: string;
   amount: number;
-  type: 'income' | 'expense';
+  type: 'income' | 'expense' | 'transfer';
   category: string;
-  accountId: string;
+  account_id: string;
+  to_account_id?: string | null;
   merchant: string;
   date: string;
-  time: string;
+  time?: string | null;
+  month: string;
 }
 
 interface SectionData {
@@ -56,20 +66,7 @@ interface SummaryData {
   color: string;
 }
 
-// --- MOCK DATA ---
-const INITIAL_TRANSACTIONS: Transaction[] = [
-  { id: '1', amount: 100.00, type: 'expense', category: 'Food', accountId: 'SBI', merchant: 'MANYAM RADHAKRISHNA CHAITANYA', date: '2026-03-01', time: '10:30 AM' },
-  { id: '2', amount: 60.00, type: 'expense', category: 'Food', accountId: 'Union', merchant: 'SR FOOD PARK', date: '2026-03-01', time: '09:00 AM' },
-  { id: '3', amount: 5000.00, type: 'income', category: 'Salary', accountId: 'SBI', merchant: 'BHANU TAPPATLA', date: '2026-03-01', time: '08:45 PM' },
-  { id: '4', amount: 1000.00, type: 'expense', category: 'Entertainment', accountId: 'Union', merchant: 'AuraGold', date: '2026-03-01', time: '12:00 AM' },
-  { id: '5', amount: 2500.00, type: 'expense', category: 'Shopping', accountId: 'SBI', merchant: 'AuraGold', date: '2026-03-01', time: '08:00 PM' },
-  { id: '6', amount: 2500.00, type: 'expense', category: 'Shopping', accountId: 'SBI', merchant: 'AuraGold', date: '2026-03-01', time: '08:00 PM' },
-  { id: '7', amount: 6000.00, type: 'income', category: 'Salary', accountId: 'Union', merchant: 'Sapthagiri Rajan Rajamanickam', date: '2026-03-01', time: '09:00 AM' },
-  { id: '8', amount: 150.00, type: 'expense', category: 'Health', accountId: 'SBI', merchant: 'Sapthagiri Rajan Rajamanickam', date: '2026-03-01', time: '10:30 AM' }
-];
-
-const CATEGORIES = ['Food', 'Salary', 'Entertainment', 'Shopping', 'Health', 'Transport', 'Bills'];
-const ACCOUNTS = ['SBI', 'Union'];
+const CATEGORIES = ['Food', 'Salary', 'Entertainment', 'Shopping', 'Health', 'Transport', 'Bills', 'Gift', 'Other'];
 const DATE_RANGES = ['Today', 'This Week', 'This Month', 'All Time', 'Custom Range'];
 
 // --- SUB-COMPONENTS ---
@@ -161,14 +158,19 @@ export default function TransactionsScreen() {
   const router = useRouter();
   const params = useLocalSearchParams();
   const searchInputRef = useRef<TextInput>(null);
+  const { user } = useAuth();
 
   // Core State
-  const [transactions, setTransactions] = useState<Transaction[]>(INITIAL_TRANSACTIONS);
+  const [transactions, setTransactions] = useState<Transaction[]>([]);
+  const [accounts, setAccounts] = useState<Account[]>([]);
+  const [loading, setLoading] = useState(true);
+  const [refreshing, setRefreshing] = useState(false);
   const [searchQuery, setSearchQuery] = useState('');
   const [selectedAccountId, setSelectedAccountId] = useState('All');
   const [selectedCategory, setSelectedCategory] = useState('All');
   const [selectedDateRange, setSelectedDateRange] = useState('This Month');
   const [showBalance, setShowBalance] = useState(true);
+  const [accountNames, setAccountNames] = useState<{ [key: string]: string }>({});
 
   // Selection Mode State (Bulk Actions)
   const [isSelectionMode, setIsSelectionMode] = useState(false);
@@ -187,7 +189,7 @@ export default function TransactionsScreen() {
   const [formAmount, setFormAmount] = useState('');
   const [formMerchant, setFormMerchant] = useState('');
   const [formCategory, setFormCategory] = useState(CATEGORIES[0]);
-  const [formAccount, setFormAccount] = useState(ACCOUNTS[0]);
+  const [formAccount, setFormAccount] = useState('');
 
   // Confirmation state
   const [confirmConfig, setConfirmConfig] = useState({
@@ -200,6 +202,22 @@ export default function TransactionsScreen() {
 
   const scrollX = useRef(new Animated.Value(0)).current;
 
+  // Reload data when screen comes into focus
+  useFocusEffect(
+    useCallback(() => {
+      if (user) {
+        loadTransactionsData();
+      }
+    }, [user])
+  );
+
+  // Initial load
+  useEffect(() => {
+    if (user) {
+      loadTransactionsData();
+    }
+  }, [user]);
+
   // Listen for 'openModal' parameter from Navbar + button
   useEffect(() => {
     if (params.openModal === 'true') {
@@ -208,12 +226,43 @@ export default function TransactionsScreen() {
     }
   }, [params.openModal]);
 
+  const loadTransactionsData = async () => {
+    try {
+      setLoading(true);
+      const [transactionsData, accountsData] = await Promise.all([
+        transactionService.getTransactions(user!.id, 100),
+        accountService.getAccounts(user!.id)
+      ]);
+
+      setTransactions(transactionsData as any);
+      setAccounts(accountsData);
+
+      // Create account name mapping
+      const nameMap: { [key: string]: string } = {};
+      accountsData.forEach(acc => {
+        nameMap[acc.id] = acc.name;
+      });
+      setAccountNames(nameMap);
+    } catch (error) {
+      console.error('Failed to load transactions:', error);
+      Alert.alert('Error', 'Failed to load transactions. Please try again.');
+    } finally {
+      setLoading(false);
+      setRefreshing(false);
+    }
+  };
+
+  const onRefresh = async () => {
+    setRefreshing(true);
+    await loadTransactionsData();
+  };
+
   // Filter Logic
   const filteredTransactions = useMemo(() => {
     return transactions.filter(t => {
       const matchSearch = t.merchant.toLowerCase().includes(searchQuery.toLowerCase()) ||
         t.category.toLowerCase().includes(searchQuery.toLowerCase());
-      const matchAccount = selectedAccountId === 'All' || t.accountId === selectedAccountId;
+      const matchAccount = selectedAccountId === 'All' || t.account_id === selectedAccountId;
       const matchCategory = selectedCategory === 'All' || t.category === selectedCategory;
       return matchSearch && matchAccount && matchCategory;
     });
@@ -221,17 +270,35 @@ export default function TransactionsScreen() {
 
   const summaries: SummaryData[] = useMemo(() => {
     const calc = (data: Transaction[]) => {
-      const income = data.filter(t => t.type === 'income').reduce((acc, t) => acc + t.amount, 0);
-      const expense = data.filter(t => t.type === 'expense').reduce((acc, t) => acc + t.amount, 0);
+      const income = data.filter(t => t.type === 'income').reduce((acc, t) => acc + Number(t.amount), 0);
+      const expense = data.filter(t => t.type === 'expense').reduce((acc, t) => acc + Number(t.amount), 0);
       return { income, expense };
     };
-    const todayVal = calc(transactions.filter(t => t.date === '2026-03-01'));
-    const weekVal = calc(transactions);
-    const monthVal = calc(transactions);
+
+    const today = new Date().toISOString().split('T')[0];
+    const weekAgo = new Date(Date.now() - 7 * 24 * 60 * 60 * 1000).toISOString().split('T')[0];
+    const monthStart = new Date(new Date().getFullYear(), new Date().getMonth(), 1).toISOString().split('T')[0];
+
+    const todayVal = calc(transactions.filter(t => t.date === today));
+    const weekVal = calc(transactions.filter(t => t.date >= weekAgo));
+    const monthVal = calc(transactions.filter(t => t.date >= monthStart));
+
+    const getTopCategory = (data: Transaction[]) => {
+      const catSpend: { [key: string]: number } = {};
+      data.filter(t => t.type === 'expense').forEach(t => {
+        catSpend[t.category] = (catSpend[t.category] || 0) + Number(t.amount);
+      });
+      const sorted = Object.entries(catSpend).sort((a, b) => b[1] - a[1]);
+      return sorted[0]?.[0] || 'None';
+    };
+
+    const todayDate = new Date();
+    const monthName = todayDate.toLocaleString('default', { month: 'long' });
+
     return [
-      { id: '1', title: "Today's Summary", period: "March 1st", income: `₹${todayVal.income.toLocaleString()}`, expenses: `₹${todayVal.expense.toLocaleString()}`, topCategory: "Food", color: '#6366F1' },
-      { id: '2', title: "This Week", period: "Feb 23 – Mar 1", income: `₹${weekVal.income.toLocaleString()}`, expenses: `₹${weekVal.expense.toLocaleString()}`, topCategory: "Shopping", color: '#0EA5E9' },
-      { id: '3', title: "This Month", period: "March 2026", income: `₹${monthVal.income.toLocaleString()}`, expenses: `₹${monthVal.expense.toLocaleString()}`, topCategory: "Food", color: '#F43F5E' }
+      { id: '1', title: "Today's Summary", period: todayDate.toLocaleDateString('en-US', { month: 'short', day: 'numeric' }), income: `₹${todayVal.income.toLocaleString()}`, expenses: `₹${todayVal.expense.toLocaleString()}`, topCategory: getTopCategory(transactions.filter(t => t.date === today)), color: '#6366F1' },
+      { id: '2', title: "This Week", period: "Last 7 days", income: `₹${weekVal.income.toLocaleString()}`, expenses: `₹${weekVal.expense.toLocaleString()}`, topCategory: getTopCategory(transactions.filter(t => t.date >= weekAgo)), color: '#0EA5E9' },
+      { id: '3', title: "This Month", period: `${monthName} ${todayDate.getFullYear()}`, income: `₹${monthVal.income.toLocaleString()}`, expenses: `₹${monthVal.expense.toLocaleString()}`, topCategory: getTopCategory(transactions.filter(t => t.date >= monthStart)), color: '#F43F5E' }
     ];
   }, [transactions]);
 
@@ -249,7 +316,7 @@ export default function TransactionsScreen() {
         title: `${dateObj.getDate()} ${monthStr}`,
         year: dateObj.getFullYear().toString(),
         month: monthStr,
-        netBalance: groups[date].reduce((acc, t) => acc + (t.type === 'income' ? t.amount : -t.amount), 0),
+        netBalance: groups[date].reduce((acc, t) => acc + (t.type === 'income' ? Number(t.amount) : -Number(t.amount)), 0),
         data: groups[date],
       };
     });
@@ -282,17 +349,29 @@ export default function TransactionsScreen() {
       message: `Are you sure you want to delete ${selectedIds.size} transactions?`,
       confirmText: 'Delete All',
       confirmColor: '#EF4444',
-      onConfirm: () => {
-        setTransactions(prev => prev.filter(t => !selectedIds.has(t.id)));
-        cancelSelection();
-        setIsConfirmVisible(false);
+      onConfirm: async () => {
+        try {
+          await Promise.all(
+            Array.from(selectedIds).map(id => transactionService.deleteTransaction(user!.id, id))
+          );
+          await loadTransactionsData();
+          cancelSelection();
+          setIsConfirmVisible(false);
+        } catch (error) {
+          console.error('Bulk delete failed:', error);
+          Alert.alert('Error', 'Failed to delete transactions');
+          setIsConfirmVisible(false);
+        }
       },
     });
     setIsConfirmVisible(true);
   };
 
   const saveWithConfirm = () => {
-    if (!formAmount || !formMerchant) return;
+    if (!formAmount || !formMerchant) {
+      Alert.alert('Missing Fields', 'Please enter amount and merchant');
+      return;
+    }
 
     if (!editingTransaction) {
       // Direct Save for New Transactions (No Confirmation)
@@ -313,23 +392,41 @@ export default function TransactionsScreen() {
     }
   };
 
-  const saveTransaction = () => {
-    const transactionData: Transaction = {
-      id: editingTransaction ? editingTransaction.id : Math.random().toString(36).substr(2, 9),
-      amount: parseFloat(formAmount),
-      type: formType,
-      merchant: formMerchant,
-      category: formCategory,
-      accountId: formAccount,
-      date: editingTransaction ? editingTransaction.date : new Date().toISOString().split('T')[0],
-      time: editingTransaction ? editingTransaction.time : new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }),
-    };
+  const saveTransaction = async () => {
+    try {
+      const amount = parseFloat(formAmount);
+      const date = new Date();
+      const month = `${date.getFullYear()}-${String(date.getMonth() + 1).padStart(2, '0')}`;
+      const dateStr = date.toISOString().split('T')[0];
 
-    setTransactions(prev => editingTransaction
-      ? prev.map(t => t.id === editingTransaction.id ? transactionData : t)
-      : [transactionData, ...prev]
-    );
-    setFormVisible(false);
+      if (editingTransaction) {
+        // Update existing transaction
+        await transactionService.editTransaction(user!.id, editingTransaction.id, {
+          amount,
+          type: formType as 'income' | 'expense',
+          merchant: formMerchant,
+          category: formCategory,
+          accountId: formAccount,
+        });
+      } else {
+        // Add new transaction
+        await transactionService.addTransaction(user!.id, {
+          accountId: formAccount,
+          amount,
+          type: formType as 'income' | 'expense',
+          category: formCategory,
+          merchant: formMerchant,
+          date: dateStr,
+          month,
+        });
+      }
+
+      await loadTransactionsData();
+      setFormVisible(false);
+    } catch (error) {
+      console.error('Save transaction failed:', error);
+      Alert.alert('Error', 'Failed to save transaction. Please try again.');
+    }
   };
 
   const handleDeleteWithConfirm = (id: string) => {
@@ -338,10 +435,17 @@ export default function TransactionsScreen() {
       message: 'Are you sure you want to delete this record?',
       confirmText: 'Delete',
       confirmColor: '#EF4444',
-      onConfirm: () => {
-        setTransactions(prev => prev.filter(t => t.id !== id));
-        setFormVisible(false);
-        setIsConfirmVisible(false);
+      onConfirm: async () => {
+        try {
+          await transactionService.deleteTransaction(user!.id, id);
+          await loadTransactionsData();
+          setFormVisible(false);
+          setIsConfirmVisible(false);
+        } catch (error) {
+          console.error('Delete transaction failed:', error);
+          Alert.alert('Error', 'Failed to delete transaction');
+          setIsConfirmVisible(false);
+        }
       }
     });
     setIsConfirmVisible(true);
@@ -355,6 +459,16 @@ export default function TransactionsScreen() {
       const colors = ['#9C27B0', '#1976D2', '#D32F2F', '#0288D1', '#388E3C', '#FBC02D'];
       return colors[name.charCodeAt(0) % colors.length];
     };
+
+    const accountName = accountNames[item.account_id] || 'Unknown';
+    const formattedDate = new Date(item.date).toLocaleDateString('en-US', { month: 'short', day: 'numeric' });
+    const timeStr = item.time
+      ? (() => {
+          const [h, m] = item.time.split(':').map(Number);
+          const suffix = h >= 12 ? 'PM' : 'AM';
+          return `${((h % 12) || 12)}:${String(m).padStart(2, '0')} ${suffix}`;
+        })()
+      : null;
 
     return (
       <TouchableOpacity
@@ -376,218 +490,281 @@ export default function TransactionsScreen() {
         </View>
         <View style={styles.cardCenter}>
           <Text style={styles.merchantName} numberOfLines={1}>{item.merchant}</Text>
-          {/* UPDATED: Added logged time beside category/account */}
-          <Text style={styles.dateSubtext}>{item.category} • {item.accountId} • {item.time}</Text>
+          <Text style={styles.dateSubtext}>{item.category} • {accountName} • {formattedDate}{timeStr ? ` • ${timeStr}` : ''}</Text>
         </View>
         <View style={styles.cardRight}>
-          <Text style={[styles.amountText, { color: item.type === 'income' ? '#16A34A' : '#0F172A' }]}>
-            {item.type === 'income' ? '+ ' : ''}₹{item.amount.toLocaleString('en-IN')}
+          <Text style={[styles.amountText, { color: item.type === 'income' ? '#10B981' : '#0F172A' }]}>
+            {item.type === 'income' ? '+ ' : ''}₹{Number(item.amount).toLocaleString('en-IN')}
           </Text>
         </View>
       </TouchableOpacity>
     );
-  }, [transactions, isSelectionMode, selectedIds]);
+  }, [transactions, isSelectionMode, selectedIds, accountNames]);
 
   const openAddForm = () => {
-    setEditingTransaction(null); setFormType('expense'); setFormAmount(''); setFormMerchant(''); setFormCategory(CATEGORIES[0]); setFormAccount(ACCOUNTS[0]);
+    if (accounts.length === 0) {
+      Alert.alert('No Accounts', 'Please create an account first');
+      return;
+    }
+    setEditingTransaction(null);
+    setFormType('expense');
+    setFormAmount('');
+    setFormMerchant('');
+    setFormCategory(CATEGORIES[0]);
+    setFormAccount(accounts[0].id);
     setFormVisible(true);
   };
 
   const openEditForm = (t: Transaction) => {
-    setEditingTransaction(t); setFormType(t.type); setFormAmount(t.amount.toString()); setFormMerchant(t.merchant); setFormCategory(t.category); setFormAccount(t.accountId);
+    setEditingTransaction(t);
+    setFormType(t.type as 'income' | 'expense');
+    setFormAmount(t.amount.toString());
+    setFormMerchant(t.merchant);
+    setFormCategory(t.category);
+    setFormAccount(t.account_id);
     setFormVisible(true);
   };
 
-  const ListHeader = useCallback(() => (
-    <View style={styles.listHeaderWrapper}>
-      <View style={styles.filtersContainer}>
-        <View style={styles.filterSection}>
-          <Text style={styles.outsideLabel}>Account</Text>
-          <TouchableOpacity style={styles.filterPillCompact} onPress={() => setAccountFilterVisible(true)}>
-            <Text style={styles.filterPillText}>{selectedAccountId}</Text>
-            <Ionicons name="caret-down" size={10} color="#64748B" />
-          </TouchableOpacity>
-        </View>
-        <View style={styles.filterSection}>
-          <Text style={styles.outsideLabel}>Category</Text>
-          <TouchableOpacity style={styles.filterPillCompact} onPress={() => setCategoryFilterVisible(true)}>
-            <Text style={styles.filterPillText}>{selectedCategory}</Text>
-            <Ionicons name="caret-down" size={10} color="#64748B" />
-          </TouchableOpacity>
-        </View>
-        <View style={styles.filterSection}>
-          <Text style={styles.outsideLabel}>Date</Text>
-          <TouchableOpacity style={styles.filterPillCompact} onPress={() => setDateFilterVisible(true)}>
-            <Ionicons name="calendar-outline" size={12} color="#64748B" style={{ marginRight: 2 }} />
-            <Text style={styles.filterPillText} numberOfLines={1}>{selectedDateRange}</Text>
-            <Ionicons name="caret-down" size={10} color="#64748B" />
-          </TouchableOpacity>
-        </View>
-      </View>
+  const ListHeader = useCallback(() => {
+    const selectedAccountName = selectedAccountId === 'All'
+      ? 'All'
+      : (accountNames[selectedAccountId] || 'All');
 
-      <View style={styles.carouselWrapper}>
-        <Animated.FlatList
-          data={summaries} horizontal pagingEnabled={false} showsHorizontalScrollIndicator={false}
-          snapToInterval={CARD_WIDTH + SPACING} decelerationRate="fast" contentContainerStyle={{ paddingHorizontal: 20, gap: SPACING }}
-          keyExtractor={(item) => item.id} onScroll={Animated.event([{ nativeEvent: { contentOffset: { x: scrollX } } }], { useNativeDriver: true })}
-          scrollEventThrottle={16}
-          renderItem={({ item, index }) => {
-            const inputRange = [(index - 1) * (CARD_WIDTH + SPACING), index * (CARD_WIDTH + SPACING), (index + 1) * (CARD_WIDTH + SPACING)];
-            const scale = scrollX.interpolate({ inputRange, outputRange: [0.95, 1, 0.95], extrapolate: 'clamp' });
-            const opacity = scrollX.interpolate({ inputRange, outputRange: [0.85, 1, 0.85], extrapolate: 'clamp' });
-            return (
-              <Animated.View style={{ width: CARD_WIDTH, transform: [{ scale }], opacity }}>
-                <LinearGradient
-                  colors={item.color === '#6366F1' ? ['#4F46E5', '#6366F1'] : item.color === '#0EA5E9' ? ['#0284C7', '#0EA5E9'] : ['#E11D48', '#F43F5E']}
-                  start={{ x: 0, y: 0 }} end={{ x: 1, y: 1 }}
-                  style={[styles.modernSummaryCard, { width: CARD_WIDTH }]}
-                >
-                  <View style={styles.cardTopRow}>
-                    <View><Text style={styles.cardLabelSmall}>{item.title.toUpperCase()}</Text><Text style={styles.periodTextPremium}>{item.period}</Text></View>
-                    <View style={styles.sparkleWrapper}><Ionicons name="sparkles-outline" size={18} color="#FFFFFF" /></View>
-                  </View>
-                  <View style={styles.middleRow}>
-                    <View><Text style={styles.columnLabel}>Income</Text><Text style={styles.columnValue}>{showBalance ? item.income : '••••••'}</Text></View>
-                    <View style={{ alignItems: 'flex-end' }}><Text style={styles.columnLabel}>Expenses</Text><Text style={styles.columnValue}>{showBalance ? item.expenses : '••••••'}</Text></View>
-                  </View>
-                  <TouchableOpacity style={styles.topSpendPill} onPress={() => setShowBalance(!showBalance)}>
-                    <Text style={styles.topSpendText}>Top Spend: {item.topCategory}</Text>
-                  </TouchableOpacity>
-                </LinearGradient>
-              </Animated.View>
-            );
-          }}
-        />
+    return (
+      <View style={styles.listHeaderWrapper}>
+        <View style={styles.filtersContainer}>
+          <View style={styles.filterSection}>
+            <Text style={styles.outsideLabel}>Account</Text>
+            <TouchableOpacity style={styles.filterPillCompact} onPress={() => setAccountFilterVisible(true)}>
+              <Text style={styles.filterPillText}>{selectedAccountName}</Text>
+              <Ionicons name="caret-down" size={10} color="#64748B" />
+            </TouchableOpacity>
+          </View>
+          <View style={styles.filterSection}>
+            <Text style={styles.outsideLabel}>Category</Text>
+            <TouchableOpacity style={styles.filterPillCompact} onPress={() => setCategoryFilterVisible(true)}>
+              <Text style={styles.filterPillText}>{selectedCategory}</Text>
+              <Ionicons name="caret-down" size={10} color="#64748B" />
+            </TouchableOpacity>
+          </View>
+          <View style={styles.filterSection}>
+            <Text style={styles.outsideLabel}>Date</Text>
+            <TouchableOpacity style={styles.filterPillCompact} onPress={() => setDateFilterVisible(true)}>
+              <Ionicons name="calendar-outline" size={12} color="#64748B" style={{ marginRight: 2 }} />
+              <Text style={styles.filterPillText} numberOfLines={1}>{selectedDateRange}</Text>
+              <Ionicons name="caret-down" size={10} color="#64748B" />
+            </TouchableOpacity>
+          </View>
+        </View>
+
+        <View style={styles.carouselWrapper}>
+          <Animated.FlatList
+            data={summaries} horizontal pagingEnabled={false} showsHorizontalScrollIndicator={false}
+            snapToInterval={CARD_WIDTH + SPACING} decelerationRate="fast" contentContainerStyle={{ paddingHorizontal: 20, gap: SPACING }}
+            keyExtractor={(item) => item.id} onScroll={Animated.event([{ nativeEvent: { contentOffset: { x: scrollX } } }], { useNativeDriver: true })}
+            scrollEventThrottle={16}
+            renderItem={({ item, index }) => {
+              const inputRange = [(index - 1) * (CARD_WIDTH + SPACING), index * (CARD_WIDTH + SPACING), (index + 1) * (CARD_WIDTH + SPACING)];
+              const scale = scrollX.interpolate({ inputRange, outputRange: [0.95, 1, 0.95], extrapolate: 'clamp' });
+              const opacity = scrollX.interpolate({ inputRange, outputRange: [0.85, 1, 0.85], extrapolate: 'clamp' });
+              return (
+                <Animated.View style={{ width: CARD_WIDTH, transform: [{ scale }], opacity }}>
+                  <LinearGradient
+                    colors={item.color === '#6366F1' ? ['#4F46E5', '#6366F1'] : item.color === '#0EA5E9' ? ['#0284C7', '#0EA5E9'] : ['#E11D48', '#F43F5E']}
+                    start={{ x: 0, y: 0 }} end={{ x: 1, y: 1 }}
+                    style={[styles.modernSummaryCard, { width: CARD_WIDTH }]}
+                  >
+                    <View style={styles.cardTopRow}>
+                      <View><Text style={styles.cardLabelSmall}>{item.title.toUpperCase()}</Text><Text style={styles.periodTextPremium}>{item.period}</Text></View>
+                      <View style={styles.sparkleWrapper}><Ionicons name="sparkles-outline" size={18} color="#FFFFFF" /></View>
+                    </View>
+                    <View style={styles.middleRow}>
+                      <View><Text style={styles.columnLabel}>Income</Text><Text style={styles.columnValue}>{showBalance ? item.income : '••••••'}</Text></View>
+                      <View style={{ alignItems: 'flex-end' }}><Text style={styles.columnLabel}>Expenses</Text><Text style={styles.columnValue}>{showBalance ? item.expenses : '••••••'}</Text></View>
+                    </View>
+                    <TouchableOpacity style={styles.topSpendPill} onPress={() => setShowBalance(!showBalance)}>
+                      <Text style={styles.topSpendText}>Top Spend: {item.topCategory}</Text>
+                    </TouchableOpacity>
+                  </LinearGradient>
+                </Animated.View>
+              );
+            }}
+          />
+        </View>
       </View>
-    </View>
-  ), [selectedAccountId, selectedCategory, selectedDateRange, scrollX, showBalance, summaries]);
+    );
+  }, [selectedAccountId, selectedCategory, selectedDateRange, scrollX, showBalance, summaries, accountNames]);
 
   return (
     <View style={[styles.mainContainer, { paddingTop: insets.top }]}>
-      <View style={styles.headerContainer}>
-        {isSelectionMode ? (
-          <View style={styles.selectionHeader}>
-            <TouchableOpacity onPress={cancelSelection} style={styles.headerIconBtn}><Ionicons name="close" size={24} color="#0F172A" /></TouchableOpacity>
-            <Text style={styles.selectionCount}>{selectedIds.size} Selected</Text>
-            <TouchableOpacity onPress={confirmBulkDelete} style={styles.headerIconBtn}><Ionicons name="trash-outline" size={24} color="#EF4444" /></TouchableOpacity>
-          </View>
-        ) : (
-          <View style={styles.searchBarContainer}>
-            <TouchableOpacity onPress={() => searchQuery ? setSearchQuery('') : router.push('/')} style={styles.backButton}><Ionicons name="arrow-back" size={24} color="#0F172A" /></TouchableOpacity>
-            <TextInput ref={searchInputRef} placeholder="Search transactions" style={styles.searchPlaceholder} placeholderTextColor="#64748B" value={searchQuery} onChangeText={setSearchQuery} autoCorrect={false} spellCheck={false} />
-            {searchQuery.length > 0 && (
-              <TouchableOpacity onPress={() => setSearchQuery('')} style={styles.clearButton}><Ionicons name="close-circle" size={20} color="#94A3B8" /></TouchableOpacity>
-            )}
-          </View>
-        )}
-      </View>
-
-      <SectionList
-        sections={sections} ListHeaderComponent={ListHeader} keyExtractor={(item) => item.id}
-        renderItem={renderTransaction}
-        renderSectionHeader={({ section }) => (
-          <View style={styles.monthHeaderRow}>
-            <View><Text style={styles.yearText}>{section.year}</Text><Text style={styles.monthText}>{section.title}</Text></View>
-            {!isSelectionMode && (
-              <Text style={[styles.monthNetText, { color: section.netBalance! >= 0 ? '#16A34A' : '#DC2626' }]}>
-                {section.netBalance! >= 0 ? '+ ' : ''}₹{Math.abs(section.netBalance!).toLocaleString('en-IN')}
-              </Text>
-            )}
-          </View>
-        )}
-        stickySectionHeadersEnabled={false} showsVerticalScrollIndicator={false} contentContainerStyle={styles.scrollContent}
-        keyboardShouldPersistTaps="always" keyboardDismissMode="on-drag"
-        ListEmptyComponent={<View style={styles.emptyState}><Ionicons name="search-outline" size={60} color="#E2E8F0" /><Text style={styles.emptyText}>No transactions found</Text></View>}
-      />
-
-      <FilterModal visible={isAccountFilterVisible} title="Select Account" selected={selectedAccountId} options={ACCOUNTS} onSelect={setSelectedAccountId} onClose={() => setAccountFilterVisible(false)} />
-      <FilterModal visible={isCategoryFilterVisible} title="Select Category" selected={selectedCategory} options={CATEGORIES} onSelect={setSelectedCategory} onClose={() => setCategoryFilterVisible(false)} />
-      <FilterModal visible={isDateFilterVisible} title="Select Date Range" selected={selectedDateRange} options={DATE_RANGES} onSelect={setSelectedDateRange} onClose={() => setDateFilterVisible(false)} />
-
-      {/* REFINED TRANSACTION FORM MODAL */}
-      <Modal visible={isFormVisible} transparent animationType="slide">
-        <KeyboardAvoidingView
-          behavior={Platform.OS === 'ios' ? 'padding' : 'height'}
-          style={{ flex: 1 }}
-        >
-          <Pressable style={styles.modalOverlay} onPress={() => setFormVisible(false)}>
-            <Pressable style={styles.formContainerCompact} onPress={e => e.stopPropagation()}>
-              <View style={styles.modalHandle} />
-
-              <View style={styles.formHeader}>
-                <Text style={styles.formTitle}>{editingTransaction ? 'Details' : 'New Transaction'}</Text>
-                {editingTransaction && (
-                  <TouchableOpacity onPress={() => handleDeleteWithConfirm(editingTransaction.id)}>
-                    <Ionicons name="trash-outline" size={24} color="#EF4444" />
-                  </TouchableOpacity>
+      {loading && !refreshing ? (
+        <View style={{ flex: 1, justifyContent: 'center', alignItems: 'center' }}>
+          <ActivityIndicator size="large" color="#6366F1" />
+          <Text style={{ marginTop: 10, color: '#64748B' }}>Loading transactions...</Text>
+        </View>
+      ) : (
+        <>
+          <View style={styles.headerContainer}>
+            {isSelectionMode ? (
+              <View style={styles.selectionHeader}>
+                <TouchableOpacity onPress={cancelSelection} style={styles.headerIconBtn}><Ionicons name="close" size={24} color="#0F172A" /></TouchableOpacity>
+                <Text style={styles.selectionCount}>{selectedIds.size} Selected</Text>
+                <TouchableOpacity onPress={confirmBulkDelete} style={styles.headerIconBtn}><Ionicons name="trash-outline" size={24} color="#EF4444" /></TouchableOpacity>
+              </View>
+            ) : (
+              <View style={styles.searchBarContainer}>
+                <TouchableOpacity onPress={() => searchQuery ? setSearchQuery('') : router.push('/')} style={styles.backButton}><Ionicons name="arrow-back" size={24} color="#0F172A" /></TouchableOpacity>
+                <TextInput ref={searchInputRef} placeholder="Search transactions" style={styles.searchPlaceholder} placeholderTextColor="#64748B" value={searchQuery} onChangeText={setSearchQuery} autoCorrect={false} spellCheck={false} />
+                {searchQuery.length > 0 && (
+                  <TouchableOpacity onPress={() => setSearchQuery('')} style={styles.clearButton}><Ionicons name="close-circle" size={20} color="#94A3B8" /></TouchableOpacity>
                 )}
               </View>
+            )}
+          </View>
 
-              <View style={styles.typeSelector}>
-                <TouchableOpacity style={[styles.typeButton, formType === 'expense' && styles.typeButtonActiveExpense]} onPress={() => setFormType('expense')}>
-                  <Text style={[styles.typeButtonText, formType === 'expense' && styles.typeButtonTextActive]}>Expense</Text>
+          <SectionList
+            sections={sections}
+            ListHeaderComponent={ListHeader}
+            keyExtractor={(item) => item.id}
+            renderItem={renderTransaction}
+            renderSectionHeader={({ section }) => (
+              <View style={styles.monthHeaderRow}>
+                <View><Text style={styles.yearText}>{section.year}</Text><Text style={styles.monthText}>{section.title}</Text></View>
+                {!isSelectionMode && (
+                  <Text style={[styles.monthNetText, { color: section.netBalance! >= 0 ? '#10B981' : '#DC2626' }]}>
+                    {section.netBalance! >= 0 ? '+ ' : ''}₹{Math.abs(section.netBalance!).toLocaleString('en-IN')}
+                  </Text>
+                )}
+              </View>
+            )}
+            stickySectionHeadersEnabled={false}
+            showsVerticalScrollIndicator={false}
+            contentContainerStyle={styles.scrollContent}
+            keyboardShouldPersistTaps="always"
+            keyboardDismissMode="on-drag"
+            refreshControl={
+              <RefreshControl
+                refreshing={refreshing}
+                onRefresh={onRefresh}
+                tintColor="#6366F1"
+                colors={['#6366F1']}
+              />
+            }
+            ListEmptyComponent={
+              <View style={styles.emptyState}>
+                <Ionicons name="receipt-outline" size={60} color="#E2E8F0" />
+                <Text style={styles.emptyText}>No transactions found</Text>
+                <TouchableOpacity
+                  style={{ marginTop: 16, backgroundColor: '#6366F1', paddingHorizontal: 20, paddingVertical: 10, borderRadius: 12 }}
+                  onPress={openAddForm}
+                >
+                  <Text style={{ color: '#FFF', fontWeight: '600' }}>Add Transaction</Text>
                 </TouchableOpacity>
-                <TouchableOpacity style={[styles.typeButton, formType === 'income' && styles.typeButtonActiveIncome]} onPress={() => setFormType('income')}>
-                  <Text style={[styles.typeButtonText, formType === 'income' && styles.typeButtonTextActive]}>Income</Text>
-                </TouchableOpacity>
               </View>
+            }
+          />
 
-              <View style={styles.inputGroupCompact}>
-                <Text style={styles.inputLabelCompact}>Amount</Text>
-                <View style={styles.amountInputWrapperCompact}>
-                  <Text style={styles.currencySymbolCompact}>₹</Text>
-                  <TextInput
-                    style={styles.amountInputCompact}
-                    placeholder="0.00"
-                    keyboardType="decimal-pad"
-                    value={formAmount}
-                    onChangeText={setFormAmount}
-                    placeholderTextColor="#94A3B8"
-                    autoFocus={!editingTransaction}
-                  />
-                </View>
-              </View>
+          <FilterModal visible={isAccountFilterVisible} title="Select Account" selected={selectedAccountId} options={accounts.map(a => a.name)} onSelect={(name: string) => {
+            if (name === 'All') {
+              setSelectedAccountId('All');
+            } else {
+              const account = accounts.find(a => a.name === name);
+              if (account) setSelectedAccountId(account.id);
+            }
+          }} onClose={() => setAccountFilterVisible(false)} />
+          <FilterModal visible={isCategoryFilterVisible} title="Select Category" selected={selectedCategory} options={CATEGORIES} onSelect={setSelectedCategory} onClose={() => setCategoryFilterVisible(false)} />
+          <FilterModal visible={isDateFilterVisible} title="Select Date Range" selected={selectedDateRange} options={DATE_RANGES} onSelect={setSelectedDateRange} onClose={() => setDateFilterVisible(false)} />
 
-              <View style={styles.inputGroupCompact}>
-                <Text style={styles.inputLabelCompact}>Merchant / Title</Text>
-                <TextInput style={styles.textInputCompact} placeholder="e.g. Starbucks, Salary" value={formMerchant} onChangeText={setFormMerchant} placeholderTextColor="#94A3B8" />
-              </View>
+          {/* REFINED TRANSACTION FORM MODAL */}
+          <Modal visible={isFormVisible} transparent animationType="slide">
+            <KeyboardAvoidingView
+              behavior={Platform.OS === 'ios' ? 'padding' : 'height'}
+              style={{ flex: 1 }}
+            >
+              <Pressable style={styles.modalOverlay} onPress={() => setFormVisible(false)}>
+                <Pressable style={styles.formContainerCompact} onPress={e => e.stopPropagation()}>
+                  <View style={styles.modalHandle} />
 
-              <View style={styles.inputGroupCompact}>
-                <Text style={styles.inputLabelCompact}>Category</Text>
-                <ScrollView horizontal showsHorizontalScrollIndicator={false} style={styles.horizontalScroll}>
-                  {CATEGORIES.map(cat => (
-                    <TouchableOpacity key={cat} style={[styles.miniPill, formCategory === cat && styles.miniPillActive]} onPress={() => setFormCategory(cat)}>
-                      <Text style={[styles.miniPillText, formCategory === cat && styles.miniPillTextActive]}>{cat}</Text>
+                  <View style={styles.formHeader}>
+                    <Text style={styles.formTitle}>{editingTransaction ? 'Details' : 'New Transaction'}</Text>
+                    {editingTransaction && (
+                      <TouchableOpacity onPress={() => handleDeleteWithConfirm(editingTransaction.id)}>
+                        <Ionicons name="trash-outline" size={24} color="#EF4444" />
+                      </TouchableOpacity>
+                    )}
+                  </View>
+
+                  <View style={styles.typeSelector}>
+                    <TouchableOpacity style={[styles.typeButton, formType === 'expense' && styles.typeButtonActiveExpense]} onPress={() => setFormType('expense')}>
+                      <Text style={[styles.typeButtonText, formType === 'expense' && styles.typeButtonTextActive]}>Expense</Text>
                     </TouchableOpacity>
-                  ))}
-                </ScrollView>
-              </View>
-
-              <View style={styles.inputGroupCompact}>
-                <Text style={styles.inputLabelCompact}>Account</Text>
-                <View style={styles.accountFastSelector}>
-                  {ACCOUNTS.map(acc => (
-                    <TouchableOpacity key={acc} style={[styles.accSelectorPill, formAccount === acc && styles.accSelectorPillActive]} onPress={() => setFormAccount(acc)}>
-                      <Text style={[styles.accSelectorText, formAccount === acc && styles.accSelectorTextActive]}>{acc}</Text>
+                    <TouchableOpacity style={[styles.typeButton, formType === 'income' && styles.typeButtonActiveIncome]} onPress={() => setFormType('income')}>
+                      <Text style={[styles.typeButtonText, formType === 'income' && styles.typeButtonTextActive]}>Income</Text>
                     </TouchableOpacity>
-                  ))}
-                </View>
-              </View>
+                  </View>
 
-              <TouchableOpacity style={styles.saveButtonCompact} onPress={saveWithConfirm}>
-                <LinearGradient colors={['#6366F1', '#4F46E5']} style={styles.saveGradientCompact}>
-                  <Text style={styles.saveButtonText}>{editingTransaction ? 'Save Changes' : 'Add Transaction'}</Text>
-                </LinearGradient>
-              </TouchableOpacity>
-              {/* Decorative background to fill the gap at the bottom when keyboard pushes modal */}
-              <View style={styles.modalBottomFill} />
-            </Pressable>
-          </Pressable>
-        </KeyboardAvoidingView>
-      </Modal>
+                  <View style={styles.inputGroupCompact}>
+                    <Text style={styles.inputLabelCompact}>Amount</Text>
+                    <View style={styles.amountInputWrapperCompact}>
+                      <Text style={styles.currencySymbolCompact}>₹</Text>
+                      <TextInput
+                        style={styles.amountInputCompact}
+                        placeholder="0.00"
+                        keyboardType="decimal-pad"
+                        value={formAmount}
+                        onChangeText={setFormAmount}
+                        placeholderTextColor="#94A3B8"
+                        autoFocus={!editingTransaction}
+                      />
+                    </View>
+                  </View>
 
-      <CustomConfirmModal visible={isConfirmVisible} title={confirmConfig.title} message={confirmConfig.message} confirmText={confirmConfig.confirmText} confirmColor={confirmConfig.confirmColor} onConfirm={confirmConfig.onConfirm} onCancel={() => setIsConfirmVisible(false)} />
+                  <View style={styles.inputGroupCompact}>
+                    <Text style={styles.inputLabelCompact}>Merchant / Title</Text>
+                    <TextInput style={styles.textInputCompact} placeholder="e.g. Starbucks, Salary" value={formMerchant} onChangeText={setFormMerchant} placeholderTextColor="#94A3B8" />
+                  </View>
+
+                  <View style={styles.inputGroupCompact}>
+                    <Text style={styles.inputLabelCompact}>Category</Text>
+                    <ScrollView horizontal showsHorizontalScrollIndicator={false} style={styles.horizontalScroll}>
+                      {CATEGORIES.map(cat => (
+                        <TouchableOpacity key={cat} style={[styles.miniPill, formCategory === cat && styles.miniPillActive]} onPress={() => setFormCategory(cat)}>
+                          <Text style={[styles.miniPillText, formCategory === cat && styles.miniPillTextActive]}>{cat}</Text>
+                        </TouchableOpacity>
+                      ))}
+                    </ScrollView>
+                  </View>
+
+                  <View style={styles.inputGroupCompact}>
+                    <Text style={styles.inputLabelCompact}>Account</Text>
+                    <View style={styles.accountFastSelector}>
+                      {accounts.map(acc => (
+                        <TouchableOpacity
+                          key={acc.id}
+                          style={[styles.accSelectorPill, formAccount === acc.id && styles.accSelectorPillActive]}
+                          onPress={() => setFormAccount(acc.id)}
+                        >
+                          <Text style={[styles.accSelectorText, formAccount === acc.id && styles.accSelectorTextActive]}>{acc.name}</Text>
+                        </TouchableOpacity>
+                      ))}
+                    </View>
+                  </View>
+
+                  <TouchableOpacity style={styles.saveButtonCompact} onPress={saveWithConfirm}>
+                    <LinearGradient colors={['#6366F1', '#4F46E5']} style={styles.saveGradientCompact}>
+                      <Text style={styles.saveButtonText}>{editingTransaction ? 'Save Changes' : 'Add Transaction'}</Text>
+                    </LinearGradient>
+                  </TouchableOpacity>
+                  {/* Decorative background to fill the gap at the bottom when keyboard pushes modal */}
+                  <View style={styles.modalBottomFill} />
+                </Pressable>
+              </Pressable>
+            </KeyboardAvoidingView>
+          </Modal>
+
+          <CustomConfirmModal visible={isConfirmVisible} title={confirmConfig.title} message={confirmConfig.message} confirmText={confirmConfig.confirmText} confirmColor={confirmConfig.confirmColor} onConfirm={confirmConfig.onConfirm} onCancel={() => setIsConfirmVisible(false)} />
+        </>
+      )}
     </View>
   );
 }
