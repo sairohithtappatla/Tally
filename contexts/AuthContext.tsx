@@ -45,17 +45,15 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   };
 
   useEffect(() => {
-    refreshUser();
-
-    // Listen to auth state changes
+    // onAuthStateChange fires INITIAL_SESSION immediately with the persisted session
+    // (or null if not logged in). This is the single source of truth for auth state.
     const { data: { subscription } } = supabase.auth.onAuthStateChange(
-      async (event, session) => {
+      (event, session) => {
         if (event === 'INITIAL_SESSION') {
-          // Fires on app start — covers the persisted session restore case
           setUser(session?.user ?? null);
           setLoading(false);
-        } else if (event === 'SIGNED_IN' && session?.user) {
-          setUser(session.user);
+        } else if (event === 'SIGNED_IN') {
+          setUser(session?.user ?? null);
           setLoading(false);
         } else if (event === 'SIGNED_OUT') {
           setUser(null);
@@ -66,9 +64,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
       }
     );
 
-    return () => {
-      subscription.unsubscribe();
-    };
+    return () => subscription.unsubscribe();
   }, []);
 
   return (

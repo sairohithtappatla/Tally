@@ -1,5 +1,6 @@
 import React, { useState, useEffect, useCallback } from 'react';
-import { View, Text, StyleSheet, ScrollView, TouchableOpacity, FlatList, Dimensions, ActivityIndicator, RefreshControl, Alert } from 'react-native';
+import { View, Text, StyleSheet, ScrollView, TouchableOpacity, FlatList, Dimensions, RefreshControl, Alert } from 'react-native';
+import { DashboardSkeleton } from '@/components/ui/SkeletonLoader';
 import { Ionicons } from '@expo/vector-icons';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { useRouter, useLocalSearchParams } from 'expo-router';
@@ -85,6 +86,12 @@ export default function HomeScreen() {
   }, [user]);
 
   const loadDashboardData = async () => {
+    // Guard: do nothing if user session not yet available
+    if (!user) {
+      setLoading(false);
+      setRefreshing(false);
+      return;
+    }
     try {
       setLoading(true);
 
@@ -161,12 +168,7 @@ export default function HomeScreen() {
   };
 
   if (loading) {
-    return (
-      <View style={[styles.mainContainer, { justifyContent: 'center', alignItems: 'center' }]}>
-        <ActivityIndicator size="large" color="#6366F1" />
-        <Text style={{ marginTop: 10, color: '#64748B' }}>Loading dashboard...</Text>
-      </View>
-    );
+    return <DashboardSkeleton insetTop={insets.top} />;
   }
 
   return (

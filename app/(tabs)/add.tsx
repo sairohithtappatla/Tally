@@ -3,6 +3,7 @@ import { View, Text, StyleSheet, ScrollView, TouchableOpacity, TextInput, Alert,
 import { Ionicons } from '@expo/vector-icons';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { useAuth } from '@/contexts/AuthContext';
+import { AddTransactionSkeleton } from '@/components/ui/SkeletonLoader';
 import { accountService } from '@/services/accountService';
 import { transactionService } from '@/services/transactionService';
 import { Account as AccountType } from '@/types/supabase';
@@ -11,9 +12,10 @@ type TransactionType = 'income' | 'expense' | 'transfer';
 
 const CATEGORIES = {
   income: ['Salary', 'Gift', 'Investment', 'Business', 'Other'],
-  expense: ['Food', 'Transport', 'Shopping', 'Health', 'Entertainment', 'Bills', 'Other'],
+  expense: ['Food', 'Shopping', 'Transport', 'Salary', 'Health', 'Entertainment', 'Bills', 'Gift', 'Other'],
   transfer: ['Transfer']
 };
+
 
 export default function AddTransactionScreen() {
   const insets = useSafeAreaInsets();
@@ -130,11 +132,7 @@ export default function AddTransactionScreen() {
   };
 
   if (loadingAccounts) {
-    return (
-      <View style={[styles.container, { paddingTop: insets.top }]}>
-        <ActivityIndicator size="large" color="#0F172A" style={{ marginTop: 50 }} />
-      </View>
-    );
+    return <AddTransactionSkeleton insetTop={insets.top} />;
   }
 
   if (accounts.length === 0) {

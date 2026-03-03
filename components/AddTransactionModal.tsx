@@ -28,7 +28,7 @@ type TransactionType = 'income' | 'expense' | 'transfer';
 
 const CATEGORIES: Record<TransactionType, string[]> = {
   income: ['Salary', 'Gift', 'Investment', 'Business', 'Other'],
-  expense: ['Food', 'Transport', 'Shopping', 'Health', 'Entertainment', 'Bills', 'Other'],
+  expense: ['Food', 'Shopping', 'Transport','Salary', 'Health','Entertainment', 'Bills', 'Gift', 'Other'],
   transfer: ['Transfer'],
 };
 

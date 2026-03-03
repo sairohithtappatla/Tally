@@ -1,5 +1,6 @@
 import React, { useState, useEffect, useCallback } from 'react';
-import { View, Text, StyleSheet, ScrollView, Animated, Modal, TextInput, Alert, Pressable, ActivityIndicator, TouchableOpacity } from 'react-native';
+import { View, Text, StyleSheet, ScrollView, Animated, Modal, TextInput, Alert, Pressable, TouchableOpacity } from 'react-native';
+import { AccountsSkeleton } from '@/components/ui/SkeletonLoader';
 import { Ionicons } from '@expo/vector-icons';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { LinearGradient } from 'expo-linear-gradient';
@@ -256,12 +257,7 @@ export default function AccountsScreen() {
   };
 
   if (loading) {
-    return (
-      <View style={[styles.mainContainer, { paddingTop: insets.top, justifyContent: 'center', alignItems: 'center' }]}>
-        <ActivityIndicator size="large" color="#6366F1" />
-        <Text style={{ marginTop: 10, color: '#64748B' }}>Loading accounts...</Text>
-      </View>
-    );
+    return <AccountsSkeleton insetTop={insets.top} />;
   }
 
   const savingsAccounts = accounts.filter(a => a.type === 'savings');
@@ -315,7 +311,7 @@ export default function AccountsScreen() {
               <Text style={styles.breakdownValue}>₹{totalExpenses.toLocaleString('en-IN', { minimumFractionDigits: 2 })}</Text>
             </View>
           </View>
-          
+
         </LinearGradient>
 
         {/* ACCOUNT GROUP SECTIONS */}

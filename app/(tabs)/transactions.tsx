@@ -17,7 +17,6 @@ import {
   Platform,
   KeyboardAvoidingView,
   RefreshControl,
-  ActivityIndicator,
   Alert,
 } from 'react-native';
 import { Ionicons, Feather } from '@expo/vector-icons';
@@ -26,6 +25,7 @@ import { LinearGradient } from 'expo-linear-gradient';
 import { useRouter, useLocalSearchParams } from 'expo-router';
 import { useFocusEffect } from '@react-navigation/native';
 import { useAuth } from '@/contexts/AuthContext';
+import { TransactionsSkeleton } from '@/components/ui/SkeletonLoader';
 import { transactionService } from '@/services/transactionService';
 import { accountService } from '@/services/accountService';
 import { Transaction as SupabaseTransaction, Account } from '@/types/supabase';
@@ -66,7 +66,7 @@ interface SummaryData {
   color: string;
 }
 
-const CATEGORIES = ['Food', 'Salary', 'Entertainment', 'Shopping', 'Health', 'Transport', 'Bills', 'Gift', 'Other'];
+const CATEGORIES = ['Food', 'Shopping', 'Transport', 'Salary', 'Health', 'Entertainment', 'Bills', 'Gift', 'Other'];
 const DATE_RANGES = ['Today', 'This Week', 'This Month', 'All Time', 'Custom Range'];
 
 // --- SUB-COMPONENTS ---
@@ -464,10 +464,10 @@ export default function TransactionsScreen() {
     const formattedDate = new Date(item.date).toLocaleDateString('en-US', { month: 'short', day: 'numeric' });
     const timeStr = item.time
       ? (() => {
-          const [h, m] = item.time.split(':').map(Number);
-          const suffix = h >= 12 ? 'PM' : 'AM';
-          return `${((h % 12) || 12)}:${String(m).padStart(2, '0')} ${suffix}`;
-        })()
+        const [h, m] = item.time.split(':').map(Number);
+        const suffix = h >= 12 ? 'PM' : 'AM';
+        return `${((h % 12) || 12)}:${String(m).padStart(2, '0')} ${suffix}`;
+      })()
       : null;
 
     return (
@@ -598,10 +598,7 @@ export default function TransactionsScreen() {
   return (
     <View style={[styles.mainContainer, { paddingTop: insets.top }]}>
       {loading && !refreshing ? (
-        <View style={{ flex: 1, justifyContent: 'center', alignItems: 'center' }}>
-          <ActivityIndicator size="large" color="#6366F1" />
-          <Text style={{ marginTop: 10, color: '#64748B' }}>Loading transactions...</Text>
-        </View>
+        <TransactionsSkeleton insetTop={0} />
       ) : (
         <>
           <View style={styles.headerContainer}>

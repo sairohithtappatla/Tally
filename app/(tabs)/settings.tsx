@@ -131,41 +131,57 @@ export default function SettingsScreen() {
       });
 
       if (!result.canceled && result.assets && result.assets.length > 0) {
-        const localUri = result.assets[0].uri;
         setImageModalVisible(false);
         setUploadingImage(true);
 
         try {
-          // Fetch as blob (works on React Native for local file URIs)
-          const response = await fetch(localUri);
-          const blob = await response.blob();
-          const ext = localUri.split('.').pop()?.toLowerCase() || 'jpg';
-          const filePath = `${user!.id}/avatar.${ext}`;
+          const localUri = result.assets[0].uri;
 
-          const { error: uploadError } = await supabase.storage
-            .from('avatars')
-            .upload(filePath, blob, {
-              contentType: `image/${ext}`,
-              upsert: true,
-            });
+          const fileExt = localUri.split('.').pop() || 'jpg';
+          const fileName = `avatar.${fileExt}`;
+          const filePath = `${user!.id}/${fileName}`;
 
-          if (uploadError) throw uploadError;
+          const formData = new FormData();
+          formData.append('file', {
+            uri: localUri,
+            name: fileName,
+            type: `image/${fileExt}`,
+          } as any);
 
-          // Get permanent public URL
-          const { data: { publicUrl } } = supabase.storage
+          const { data: sessionData } = await supabase.auth.getSession();
+          const accessToken = sessionData.session?.access_token;
+
+          if (!accessToken) throw new Error('No session found');
+
+          const uploadResponse = await fetch(
+            `https://jmoghyrgadpvmlnwmlys.supabase.co/storage/v1/object/avatars/${filePath}`,
+            {
+              method: 'POST',
+              headers: {
+                Authorization: `Bearer ${accessToken}`,
+                'x-upsert': 'true',
+              },
+              body: formData,
+            }
+          );
+
+          if (!uploadResponse.ok) {
+            const err = await uploadResponse.text();
+            throw new Error(err);
+          }
+
+          const { data } = supabase.storage
             .from('avatars')
             .getPublicUrl(filePath);
 
-          // Bust cache with timestamp
-          const cachedUrl = `${publicUrl}?t=${Date.now()}`;
+          const publicUrl = data.publicUrl;
 
-          // Save URL to user_profiles
           await supabase
             .from('user_profiles')
             .update({ avatar_url: publicUrl })
             .eq('id', user!.id);
 
-          setProfileImage(cachedUrl);
+          setProfileImage(`${publicUrl}?t=${Date.now()}`);
           showToast('Profile picture saved!');
         } catch (uploadErr: any) {
           console.error('Upload failed:', uploadErr);
