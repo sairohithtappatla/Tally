@@ -95,14 +95,19 @@ export default function AddTransactionScreen() {
     try {
       setLoading(true);
       const now = new Date();
-      const monthStr = `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, '0')}`;
+      const year = now.getFullYear();
+      const monthNum = String(now.getMonth() + 1).padStart(2, '0');
+      const day = String(now.getDate()).padStart(2, '0');
+
+      const monthStr = `${year}-${monthNum}`;
+      const dateStr = `${year}-${monthNum}-${day}`;
 
       if (type === 'transfer') {
         await transactionService.transfer(user.id, {
           accountId: selectedAccount,
           toAccountId: selectedToAccount,
           amount: parseFloat(amount),
-          date: now.toISOString(),
+          date: now.toISOString(), // Transfer still uses full ISO for precision, or we can use local too if needed
           month: monthStr,
           merchant: merchant,
           category: 'Transfer'
@@ -114,7 +119,7 @@ export default function AddTransactionScreen() {
           type: type,
           category: category,
           merchant: merchant,
-          date: now.toISOString().split('T')[0],
+          date: dateStr,
           month: monthStr,
         });
       }

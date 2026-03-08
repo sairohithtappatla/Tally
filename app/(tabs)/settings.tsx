@@ -23,6 +23,10 @@ import { Alert } from 'react-native';
 import { useAuth } from '@/contexts/AuthContext';
 import { alertService } from '@/services/alertService';
 import { supabase } from '@/services/supabaseClient';
+import { transactionService } from '@/services/transactionService';
+import * as FileSystem from 'expo-file-system';
+import * as Sharing from 'expo-sharing';
+import { decode } from 'base64-arraybuffer';
 
 const { width: SCREEN_WIDTH } = Dimensions.get('window');
 
@@ -56,6 +60,7 @@ export default function SettingsScreen() {
   const [isSuccessToastVisible, setSuccessToastVisible] = useState(false);
   const [isAboutModalVisible, setAboutModalVisible] = useState(false);
   const [toastMessage, setToastMessage] = useState('');
+  const [exporting, setExporting] = useState(false);
 
   useEffect(() => {
     if (!user) return;
@@ -158,34 +163,18 @@ export default function SettingsScreen() {
           const fileName = `avatar.${fileExt}`;
           const filePath = `${user!.id}/${fileName}`;
 
-          const formData = new FormData();
-          formData.append('file', {
-            uri: localUri,
-            name: fileName,
-            type: `image/${fileExt}`,
-          } as any);
+          const avatarFile = new FileSystem.File(localUri);
+          const base64 = await avatarFile.base64();
+          const fileData = decode(base64);
 
-          const { data: sessionData } = await supabase.auth.getSession();
-          const accessToken = sessionData.session?.access_token;
+          const { data: uploadData, error: uploadError } = await supabase.storage
+            .from('avatars')
+            .upload(filePath, fileData, {
+              contentType: `image/${fileExt}`,
+              upsert: true,
+            });
 
-          if (!accessToken) throw new Error('No session found');
-
-          const uploadResponse = await fetch(
-            `https://jmoghyrgadpvmlnwmlys.supabase.co/storage/v1/object/avatars/${filePath}`,
-            {
-              method: 'POST',
-              headers: {
-                Authorization: `Bearer ${accessToken}`,
-                'x-upsert': 'true',
-              },
-              body: formData,
-            }
-          );
-
-          if (!uploadResponse.ok) {
-            const err = await uploadResponse.text();
-            throw new Error(err);
-          }
+          if (uploadError) throw uploadError;
 
           const { data } = supabase.storage
             .from('avatars')
@@ -263,6 +252,58 @@ export default function SettingsScreen() {
       setSavingBudget(false);
     }
   };
+
+  const handleExportCSV = async () => {
+    if (!user) return;
+
+    try {
+      setExporting(true);
+      // Fetch a large number of transactions (limit to 10k for safety)
+      const transactions = await transactionService.getTransactions(user.id, 10000);
+
+      if (transactions.length === 0) {
+        Alert.alert('No Data', 'You have no transactions to export.');
+        return;
+      }
+
+      // 1. Create CSV Header
+      let csvContent = '\uFEFFDate,Time,Type,Category,Merchant,Amount\n';
+
+      // 2. Add Rows
+      transactions.forEach((t) => {
+        // Escape commas and quotes in merchant names
+        const safeMerchant = `"${t.merchant.replace(/"/g, '""')}"`;
+        csvContent += `${t.date},${t.time || ''},${t.type},${t.category},${safeMerchant},${t.amount}\n`;
+      });
+
+      // 3. Define File Path
+      const now = new Date();
+      const localDate = `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, '0')}-${String(now.getDate()).padStart(2, '0')}`;
+      const fileName = `Tally_Export_${localDate}.csv`;
+      // Use the File constructor to safely join paths (handles slashes automatically)
+      const exportFile = new FileSystem.File(FileSystem.Paths.cache, fileName);
+      const fileUri = exportFile.uri;
+
+      // 4. Write and Share
+      await exportFile.write(csvContent);
+
+      const isAvailable = await Sharing.isAvailableAsync();
+      if (isAvailable) {
+        await Sharing.shareAsync(fileUri, {
+          mimeType: 'text/csv',
+          dialogTitle: 'Export Tally Transactions',
+        });
+      } else {
+        Alert.alert('Error', 'Sharing is not available on this device');
+      }
+    } catch (error) {
+      console.error('Export failed:', error);
+      Alert.alert('Error', 'Failed to export transactions.');
+    } finally {
+      setExporting(false);
+    }
+  };
+
 
   return (
     <View style={[styles.container, { paddingTop: insets.top }]}>
@@ -389,6 +430,25 @@ export default function SettingsScreen() {
               <Ionicons name="information-circle-outline" size={20} color="#64748B" />
             </View>
             <Text style={styles.menuItemText}>About Tally</Text>
+            <Ionicons name="chevron-forward" size={18} color="#CBD5E1" />
+          </TouchableOpacity>
+        </View>
+
+        <View style={styles.menuSection}>
+          <Text style={styles.menuLabel}>Data Management</Text>
+          <TouchableOpacity
+            style={styles.menuItem}
+            onPress={handleExportCSV}
+            disabled={exporting}
+          >
+            <View style={[styles.iconBox, { backgroundColor: '#F0FDF4' }]}>
+              {exporting ? (
+                <ActivityIndicator size="small" color="#16A34A" />
+              ) : (
+                <Ionicons name="cloud-download-outline" size={20} color="#16A34A" />
+              )}
+            </View>
+            <Text style={styles.menuItemText}>Export to CSV (Excel)</Text>
             <Ionicons name="chevron-forward" size={18} color="#CBD5E1" />
           </TouchableOpacity>
         </View>

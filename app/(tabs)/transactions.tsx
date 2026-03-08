@@ -73,8 +73,19 @@ const DATE_RANGES = ['Today', 'This Week', 'This Month', 'All Time', 'Custom Ran
 
 const FilterModal = ({ visible, selected, options, onSelect, onClose, title }: any) => {
   const [showCustomRange, setShowCustomRange] = useState(false);
-  const [startDate, setStartDate] = useState('2026-03-01');
-  const [endDate, setEndDate] = useState('2026-03-31');
+  const todayDefault = new Date();
+  const firstDay = new Date(todayDefault.getFullYear(), todayDefault.getMonth(), 1);
+  const lastDay = new Date(todayDefault.getFullYear(), todayDefault.getMonth() + 1, 0);
+
+  const formatDate = (d: Date) => {
+    const year = d.getFullYear();
+    const month = String(d.getMonth() + 1).padStart(2, '0');
+    const day = String(d.getDate()).padStart(2, '0');
+    return `${year}-${month}-${day}`;
+  };
+
+  const [startDate, setStartDate] = useState(formatDate(firstDay));
+  const [endDate, setEndDate] = useState(formatDate(lastDay));
 
   return (
     <Modal visible={visible} transparent animationType="slide">
@@ -314,9 +325,21 @@ export default function TransactionsScreen() {
       return { income, expense };
     };
 
-    const today = new Date().toISOString().split('T')[0];
-    const weekAgo = new Date(Date.now() - 7 * 24 * 60 * 60 * 1000).toISOString().split('T')[0];
-    const monthStart = new Date(new Date().getFullYear(), new Date().getMonth(), 1).toISOString().split('T')[0];
+    const now = new Date();
+    const formatDate = (d: Date) => {
+      const year = d.getFullYear();
+      const month = String(d.getMonth() + 1).padStart(2, '0');
+      const day = String(d.getDate()).padStart(2, '0');
+      return `${year}-${month}-${day}`;
+    };
+
+    const today = formatDate(now);
+    const weekAgoDate = new Date(now);
+    weekAgoDate.setDate(now.getDate() - 7);
+    const weekAgo = formatDate(weekAgoDate);
+
+    const monthStartDate = new Date(now.getFullYear(), now.getMonth(), 1);
+    const monthStart = formatDate(monthStartDate);
 
     const todayVal = calc(transactions.filter(t => t.date === today));
     const weekVal = calc(transactions.filter(t => t.date >= weekAgo));
@@ -435,8 +458,11 @@ export default function TransactionsScreen() {
     try {
       const amount = parseFloat(formAmount);
       const date = new Date();
-      const month = `${date.getFullYear()}-${String(date.getMonth() + 1).padStart(2, '0')}`;
-      const dateStr = date.toISOString().split('T')[0];
+      const year = date.getFullYear();
+      const monthNum = String(date.getMonth() + 1).padStart(2, '0');
+      const day = String(date.getDate()).padStart(2, '0');
+      const month = `${year}-${monthNum}`;
+      const dateStr = `${year}-${monthNum}-${day}`;
 
       if (editingTransaction) {
         // Update existing transaction

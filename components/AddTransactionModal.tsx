@@ -28,7 +28,7 @@ type TransactionType = 'income' | 'expense' | 'transfer';
 
 const CATEGORIES: Record<TransactionType, string[]> = {
   income: ['Salary', 'Gift', 'Investment', 'Business', 'Other'],
-  expense: ['Food', 'Shopping', 'Transport','Salary', 'Health','Entertainment', 'Bills', 'Gift', 'Other'],
+  expense: ['Food', 'Shopping', 'Transport', 'Salary', 'Health', 'Entertainment', 'Bills', 'Gift', 'Other'],
   transfer: ['Transfer'],
 };
 
@@ -131,8 +131,12 @@ export default function AddTransactionModal({ visible, onClose, onSuccess }: Pro
     try {
       setSaving(true);
       const now = new Date();
-      const monthStr = `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, '0')}`;
-      const dateStr = now.toISOString().split('T')[0];
+      const year = now.getFullYear();
+      const monthNum = String(now.getMonth() + 1).padStart(2, '0');
+      const day = String(now.getDate()).padStart(2, '0');
+
+      const monthStr = `${year}-${monthNum}`;
+      const dateStr = `${year}-${monthNum}-${day}`;
 
       let newAlerts: AlertLog[] = [];
 
