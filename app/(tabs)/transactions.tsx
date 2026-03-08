@@ -260,13 +260,52 @@ export default function TransactionsScreen() {
   // Filter Logic
   const filteredTransactions = useMemo(() => {
     return transactions.filter(t => {
+      // 1. Search filter
       const matchSearch = t.merchant.toLowerCase().includes(searchQuery.toLowerCase()) ||
         t.category.toLowerCase().includes(searchQuery.toLowerCase());
+
+      // 2. Account filter
       const matchAccount = selectedAccountId === 'All' || t.account_id === selectedAccountId;
+
+      // 3. Category filter
       const matchCategory = selectedCategory === 'All' || t.category === selectedCategory;
-      return matchSearch && matchAccount && matchCategory;
+
+      // 4. Date Range filter
+      let matchDate = true;
+      if (selectedDateRange !== 'All Time') {
+        const txnDate = new Date(t.date);
+        const today = new Date();
+        today.setHours(0, 0, 0, 0);
+
+        if (selectedDateRange === 'Today') {
+          const tDate = new Date(t.date);
+          tDate.setHours(0, 0, 0, 0);
+          matchDate = tDate.getTime() === today.getTime();
+        } else if (selectedDateRange === 'This Week') {
+          const weekAgo = new Date(today);
+          weekAgo.setDate(today.getDate() - 7);
+          matchDate = txnDate >= weekAgo;
+        } else if (selectedDateRange === 'This Month') {
+          const monthStart = new Date(today.getFullYear(), today.getMonth(), 1);
+          matchDate = txnDate >= monthStart;
+        } else if (selectedDateRange.startsWith('Range:')) {
+          // Range: YYYY-MM-DD - YYYY-MM-DD
+          try {
+            const parts = selectedDateRange.replace('Range: ', '').split(' - ');
+            const start = new Date(parts[0]);
+            const end = new Date(parts[1]);
+            end.setHours(23, 59, 59, 999);
+            matchDate = txnDate >= start && txnDate <= end;
+          } catch (e) {
+            console.warn('Invalid range format:', selectedDateRange);
+            matchDate = true;
+          }
+        }
+      }
+
+      return matchSearch && matchAccount && matchCategory && matchDate;
     });
-  }, [searchQuery, selectedAccountId, selectedCategory, transactions]);
+  }, [searchQuery, selectedAccountId, selectedCategory, selectedDateRange, transactions]);
 
   const summaries: SummaryData[] = useMemo(() => {
     const calc = (data: Transaction[]) => {

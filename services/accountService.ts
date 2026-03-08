@@ -37,9 +37,20 @@ export const accountService = {
     }
   },
 
-  // Atomic balance update using database function
+  // Atomic balance update using database function (or direct for 'set')
   async updateBalance(accountId: string, amount: number, operation: 'add' | 'subtract' | 'set' = 'add') {
     try {
+      if (operation === 'set') {
+        const { data, error } = await supabase
+          .from('accounts')
+          .update({ balance: amount })
+          .eq('id', accountId)
+          .select()
+          .single();
+        if (error) throw error;
+        return data as Account;
+      }
+
       const { data, error } = await supabase.rpc('update_account_balance', {
         p_account_id: accountId,
         p_amount: amount,

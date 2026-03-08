@@ -53,6 +53,8 @@ export default function HomeScreen() {
   const [showAddModal, setShowAddModal] = useState(false);
   const [pendingAlerts, setPendingAlerts] = useState<AlertLog[]>([]);
   const [monthlyBudget, setMonthlyBudget] = useState(0);
+  const [dailyBudget, setDailyBudget] = useState<number | null>(null);
+  const [weeklyBudget, setWeeklyBudget] = useState<number | null>(null);
 
   // Get current date
   const today = new Date();
@@ -95,14 +97,16 @@ export default function HomeScreen() {
     try {
       setLoading(true);
 
-      // Load accounts, transactions, and monthly budget in parallel
-      const [accountsData, transactionsData, budget] = await Promise.all([
+      // Load accounts, transactions, and all budgets in parallel
+      const [accountsData, transactionsData, budgets] = await Promise.all([
         accountService.getAccounts(user!.id),
-        transactionService.getTransactions(user!.id, 3),
-        alertService.getMonthlyBudget(user!.id),
+        transactionService.getTransactions(user!.id, 50),
+        alertService.getAllBudgets(user!.id),
       ]);
 
-      setMonthlyBudget(budget);
+      setMonthlyBudget(budgets.monthly);
+      setDailyBudget(budgets.daily);
+      setWeeklyBudget(budgets.weekly);
 
       // Sort accounts: expense type first, then others
       const sortedAccounts = [...accountsData].sort((a, b) =>
@@ -110,7 +114,7 @@ export default function HomeScreen() {
       );
 
       setAccounts(sortedAccounts);
-      setRecentTransactions(transactionsData);
+      setRecentTransactions(transactionsData.slice(0, 3)); // Still show only 3 in UI
 
       // Calculate total balance from all accounts
       const total = accountsData.reduce((sum, acc) => sum + Number(acc.balance), 0);
@@ -133,9 +137,11 @@ export default function HomeScreen() {
   };
 
   const calculateSpending = (transactions: Transaction[]) => {
-    const now = new Date();
-    const todayStart = new Date(now.getFullYear(), now.getMonth(), now.getDate());
-    const weekStart = new Date(now.getTime() - 7 * 24 * 60 * 60 * 1000);
+    const today = new Date();
+    today.setHours(0, 0, 0, 0);
+
+    const weekAgo = new Date(today);
+    weekAgo.setDate(today.getDate() - 7);
 
     let todayTotal = 0;
     let weekTotal = 0;
@@ -143,11 +149,13 @@ export default function HomeScreen() {
     transactions.forEach(txn => {
       if (txn.type === 'expense') {
         const txnDate = new Date(txn.date);
-        if (txnDate >= todayStart) {
-          todayTotal += txn.amount;
+        txnDate.setHours(0, 0, 0, 0);
+
+        if (txnDate.getTime() === today.getTime()) {
+          todayTotal += Number(txn.amount);
         }
-        if (txnDate >= weekStart) {
-          weekTotal += txn.amount;
+        if (txnDate >= weekAgo) {
+          weekTotal += Number(txn.amount);
         }
       }
     });
@@ -387,6 +395,8 @@ export default function HomeScreen() {
         <AlertBanner
           alerts={pendingAlerts}
           monthlyBudget={monthlyBudget}
+          dailyBudget={dailyBudget}
+          weeklyBudget={weeklyBudget}
           onDismissAll={() => setPendingAlerts([])}
         />
       )}

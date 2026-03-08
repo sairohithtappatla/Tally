@@ -17,6 +17,8 @@ const DISPLAY_DURATION = 4000; // 4 seconds per alert
 interface Props {
   alerts: AlertLog[];
   monthlyBudget?: number;
+  dailyBudget?: number | null;
+  weeklyBudget?: number | null;
   onDismissAll?: () => void;
 }
 
@@ -31,16 +33,22 @@ function getThresholdConfig(threshold: number) {
     return { color: '#EF4444', bg: '#FEF2F2', border: '#FCA5A5', icon: 'alert-circle' as const, label: 'Limit Reached' };
   if (threshold === 80)
     return { color: '#F97316', bg: '#FFF7ED', border: '#FDBA74', icon: 'warning' as const, label: 'High Usage' };
-  return { color: '#EAB308', bg: '#FEFCE8', border: '#FDE047', icon: 'alert' as const, label: 'Heads Up' };
+  // 60%
+  return { color: '#EAB308', bg: '#FEFCE8', border: '#FDE047', icon: 'alert' as const, label: 'Approaching Limit' };
 }
 
-function getBudgetForPeriod(monthly: number, period: string) {
-  if (period === 'daily') return monthly / 30;
-  if (period === 'weekly') return monthly / 4;
-  return monthly;
+function getBudgetForPeriod(
+  period: string,
+  monthly: number,
+  daily: number | null | undefined,
+  weekly: number | null | undefined,
+) {
+  if (period === 'daily') return daily ?? null;
+  if (period === 'weekly') return weekly ?? null;
+  return monthly > 0 ? monthly : null;
 }
 
-export default function AlertBanner({ alerts, monthlyBudget, onDismissAll }: Props) {
+export default function AlertBanner({ alerts, monthlyBudget = 0, dailyBudget, weeklyBudget, onDismissAll }: Props) {
   const insets = useSafeAreaInsets();
   const [currentIndex, setCurrentIndex] = useState(0);
   const translateY = useRef(new Animated.Value(-120)).current;
@@ -97,11 +105,11 @@ export default function AlertBanner({ alerts, monthlyBudget, onDismissAll }: Pro
   const cfg = getThresholdConfig(currentAlert.threshold);
   const periodLabel = getPeriodLabel(currentAlert.period ?? 'monthly');
 
+  const periodBudget = getBudgetForPeriod(currentAlert.period ?? 'monthly', monthlyBudget, dailyBudget, weeklyBudget);
   let budgetLine = '';
-  if (monthlyBudget) {
-    const periodBudget = getBudgetForPeriod(monthlyBudget, currentAlert.period ?? 'monthly');
+  if (periodBudget) {
     const spent = (periodBudget * currentAlert.threshold) / 100;
-    budgetLine = `₹${spent.toFixed(0)} of ₹${periodBudget.toFixed(0)} ${periodLabel.toLowerCase()} budget`;
+    budgetLine = `₹${spent.toLocaleString('en-IN', { maximumFractionDigits: 0 })} of ₹${periodBudget.toLocaleString('en-IN', { maximumFractionDigits: 0 })} ${periodLabel.toLowerCase()} budget`;
   }
 
   const remainingLabel =

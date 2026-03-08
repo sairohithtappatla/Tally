@@ -104,12 +104,47 @@ export const alertService = {
     }
   },
 
+  async getAllBudgets(userId: string): Promise<{ monthly: number; daily: number | null; weekly: number | null }> {
+    try {
+      const { data, error } = await supabase
+        .from('user_profiles')
+        .select('monthly_budget, daily_budget, weekly_budget')
+        .eq('id', userId)
+        .single();
+
+      if (error) throw error;
+      return {
+        monthly: Number(data?.monthly_budget) || 0,
+        daily: data?.daily_budget != null ? Number(data.daily_budget) : null,
+        weekly: data?.weekly_budget != null ? Number(data.weekly_budget) : null,
+      };
+    } catch (error) {
+      console.error('Fetch budgets failed:', error);
+      return { monthly: 0, daily: null, weekly: null };
+    }
+  },
+
   async updateMonthlyBudget(userId: string, budget: number): Promise<void> {
     const { error } = await supabase
       .from('user_profiles')
       .update({ monthly_budget: budget })
       .eq('id', userId);
+    if (error) throw error;
+  },
 
+  async updateDailyBudget(userId: string, budget: number | null): Promise<void> {
+    const { error } = await supabase
+      .from('user_profiles')
+      .update({ daily_budget: budget })
+      .eq('id', userId);
+    if (error) throw error;
+  },
+
+  async updateWeeklyBudget(userId: string, budget: number | null): Promise<void> {
+    const { error } = await supabase
+      .from('user_profiles')
+      .update({ weekly_budget: budget })
+      .eq('id', userId);
     if (error) throw error;
   },
 };

@@ -2,6 +2,7 @@ import { createContext, useContext, useState, useEffect, ReactNode } from 'react
 import { authService } from '../services/authService';
 import { User } from '@supabase/supabase-js';
 import { supabase } from '../services/supabaseClient';
+import { setupPushNotifications } from '../services/notificationService';
 
 interface AuthContextType {
   user: User | null;
@@ -52,9 +53,17 @@ export function AuthProvider({ children }: { children: ReactNode }) {
         if (event === 'INITIAL_SESSION') {
           setUser(session?.user ?? null);
           setLoading(false);
+          // Re-register on every cold start (FCM token can rotate after reinstall)
+          if (session?.user) {
+            setupPushNotifications(session.user.id);
+          }
         } else if (event === 'SIGNED_IN') {
           setUser(session?.user ?? null);
           setLoading(false);
+          // Register token on fresh login
+          if (session?.user) {
+            setupPushNotifications(session.user.id);
+          }
         } else if (event === 'SIGNED_OUT') {
           setUser(null);
           setLoading(false);

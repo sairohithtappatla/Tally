@@ -42,7 +42,10 @@ export default function SettingsScreen() {
 
   // -- Budget State --
   const [monthlyBudget, setMonthlyBudget] = useState(0);
+  const [dailyBudget, setDailyBudget] = useState<number | null>(null);
+  const [weeklyBudget, setWeeklyBudget] = useState<number | null>(null);
   const [isBudgetModalVisible, setBudgetModalVisible] = useState(false);
+  const [activeBudgetType, setActiveBudgetType] = useState<'monthly' | 'daily' | 'weekly'>('monthly');
   const [tempBudget, setTempBudget] = useState('');
   const [savingBudget, setSavingBudget] = useState(false);
 
@@ -57,15 +60,16 @@ export default function SettingsScreen() {
   useEffect(() => {
     if (!user) return;
 
-    // Load profile (name, avatar, budget) from DB
+    // Load profile (name, avatar, budgets) from DB
     const loadProfile = async () => {
-      const [budget, profile] = await Promise.all([
-        alertService.getMonthlyBudget(user.id),
+      const [budgets, profile] = await Promise.all([
+        alertService.getAllBudgets(user.id),
         supabase.from('user_profiles').select('name, avatar_url').eq('id', user.id).single(),
       ]);
 
-      setMonthlyBudget(budget);
-      setTempBudget(budget > 0 ? String(budget) : '');
+      setMonthlyBudget(budgets.monthly);
+      setDailyBudget(budgets.daily);
+      setWeeklyBudget(budgets.weekly);
 
       if (profile.data) {
         const dbName = profile.data.name || user.user_metadata?.name || user.email?.split('@')[0] || 'User';
@@ -83,6 +87,19 @@ export default function SettingsScreen() {
 
     loadProfile();
   }, [user]);
+
+  const BUDGET_MODAL_CONFIG = {
+    daily: { icon: 'timer-outline', iconBg: '#EFF6FF', iconColor: '#3B82F6', title: 'Daily Budget', description: 'Set your daily spending limit. You\'ll be alerted at 60%, 80% and 100%.', placeholder: 'e.g. 400', btnColor: '#3B82F6' },
+    weekly: { icon: 'calendar-outline', iconBg: '#F5F3FF', iconColor: '#8B5CF6', title: 'Weekly Budget', description: 'Set your weekly spending limit. You\'ll be alerted at 60%, 80% and 100%.', placeholder: 'e.g. 800', btnColor: '#8B5CF6' },
+    monthly: { icon: 'pie-chart-outline', iconBg: '#FFF7ED', iconColor: '#F97316', title: 'Monthly Budget', description: 'Set your monthly spending limit. You\'ll be alerted at 60%, 80% and 100%.', placeholder: 'e.g. 3000', btnColor: '#F97316' },
+  } as const;
+
+  const openBudgetModal = (type: 'monthly' | 'daily' | 'weekly') => {
+    setActiveBudgetType(type);
+    const current = type === 'monthly' ? monthlyBudget : type === 'daily' ? dailyBudget : weeklyBudget;
+    setTempBudget(current != null && current > 0 ? String(current) : '');
+    setBudgetModalVisible(true);
+  };
 
   const showToast = (msg: string) => {
     setToastMessage(msg);
@@ -227,10 +244,19 @@ export default function SettingsScreen() {
     }
     try {
       setSavingBudget(true);
-      await alertService.updateMonthlyBudget(user!.id, val);
-      setMonthlyBudget(val);
+      if (activeBudgetType === 'monthly') {
+        await alertService.updateMonthlyBudget(user!.id, val);
+        setMonthlyBudget(val);
+      } else if (activeBudgetType === 'daily') {
+        await alertService.updateDailyBudget(user!.id, val);
+        setDailyBudget(val);
+      } else {
+        await alertService.updateWeeklyBudget(user!.id, val);
+        setWeeklyBudget(val);
+      }
       setBudgetModalVisible(false);
-      showToast(`Monthly budget set to ₹${val.toLocaleString()}`);
+      const typeLabel = activeBudgetType.charAt(0).toUpperCase() + activeBudgetType.slice(1);
+      showToast(`${typeLabel} budget set to ₹${val.toLocaleString()}`);
     } catch (e: any) {
       Alert.alert('Error', e.message || 'Failed to update budget');
     } finally {
@@ -313,23 +339,41 @@ export default function SettingsScreen() {
             <Ionicons name="chevron-forward" size={18} color="#CBD5E1" />
           </TouchableOpacity>
 
-          <TouchableOpacity
-            style={styles.menuItem}
-            onPress={() => {
-              setTempBudget(monthlyBudget > 0 ? String(monthlyBudget) : '');
-              setBudgetModalVisible(true);
-            }}
-          >
+          <TouchableOpacity style={styles.menuItem} onPress={() => openBudgetModal('daily')}>
+            <View style={[styles.iconBox, { backgroundColor: '#EFF6FF' }]}>
+              <Ionicons name="timer-outline" size={20} color="#3B82F6" />
+            </View>
+            <View style={{ flex: 1 }}>
+              <Text style={styles.menuItemText}>Daily Budget</Text>
+              <Text style={{ fontSize: 12, color: '#64748B', marginTop: 1 }}>
+                {dailyBudget != null && dailyBudget > 0 ? `₹${dailyBudget.toLocaleString()}/day • alerts at 60%, 80%, 100%` : 'Not set — tap to configure'}
+              </Text>
+            </View>
+            <Ionicons name="chevron-forward" size={18} color="#CBD5E1" />
+          </TouchableOpacity>
+
+          <TouchableOpacity style={styles.menuItem} onPress={() => openBudgetModal('weekly')}>
+            <View style={[styles.iconBox, { backgroundColor: '#F5F3FF' }]}>
+              <Ionicons name="calendar-outline" size={20} color="#8B5CF6" />
+            </View>
+            <View style={{ flex: 1 }}>
+              <Text style={styles.menuItemText}>Weekly Budget</Text>
+              <Text style={{ fontSize: 12, color: '#64748B', marginTop: 1 }}>
+                {weeklyBudget != null && weeklyBudget > 0 ? `₹${weeklyBudget.toLocaleString()}/week • alerts at 60%, 80%, 100%` : 'Not set — tap to configure'}
+              </Text>
+            </View>
+            <Ionicons name="chevron-forward" size={18} color="#CBD5E1" />
+          </TouchableOpacity>
+
+          <TouchableOpacity style={styles.menuItem} onPress={() => openBudgetModal('monthly')}>
             <View style={[styles.iconBox, { backgroundColor: '#FFF7ED' }]}>
               <Ionicons name="pie-chart-outline" size={20} color="#F97316" />
             </View>
             <View style={{ flex: 1 }}>
               <Text style={styles.menuItemText}>Monthly Budget</Text>
-              {monthlyBudget > 0 && (
-                <Text style={{ fontSize: 12, color: '#64748B', marginTop: 1 }}>
-                  ₹{monthlyBudget.toLocaleString()}/month
-                </Text>
-              )}
+              <Text style={{ fontSize: 12, color: '#64748B', marginTop: 1 }}>
+                {monthlyBudget > 0 ? `₹${monthlyBudget.toLocaleString()}/month • alerts at 60%, 80%, 100%` : 'Not set — tap to configure'}
+              </Text>
             </View>
             <Ionicons name="chevron-forward" size={18} color="#CBD5E1" />
           </TouchableOpacity>
@@ -498,22 +542,22 @@ export default function SettingsScreen() {
         <KeyboardAvoidingView behavior={Platform.OS === 'ios' ? 'padding' : 'height'} style={{ flex: 1 }}>
           <Pressable style={styles.modalOverlay} onPress={() => setBudgetModalVisible(false)}>
             <Pressable style={[styles.modalContent, { width: '90%' }]} onPress={e => e.stopPropagation()}>
-              <View style={[styles.modalIconBox, { backgroundColor: '#FFF7ED' }]}>
-                <Ionicons name="pie-chart-outline" size={36} color="#F97316" />
+              <View style={[styles.modalIconBox, { backgroundColor: BUDGET_MODAL_CONFIG[activeBudgetType].iconBg }]}>
+                <Ionicons name={BUDGET_MODAL_CONFIG[activeBudgetType].icon as any} size={36} color={BUDGET_MODAL_CONFIG[activeBudgetType].iconColor} />
               </View>
-              <Text style={styles.modalTitle}>Monthly Budget</Text>
+              <Text style={styles.modalTitle}>{BUDGET_MODAL_CONFIG[activeBudgetType].title}</Text>
               <Text style={styles.modalDescription}>
-                Set your total monthly spending limit. Alert notifications will fire at 50%, 80%, and 100%.
+                {BUDGET_MODAL_CONFIG[activeBudgetType].description}
               </Text>
 
               <View style={styles.budgetInputRow}>
-                <Text style={styles.budgetCurrency}>₹</Text>
+                <Text style={[styles.budgetCurrency, { color: BUDGET_MODAL_CONFIG[activeBudgetType].iconColor }]}>₹</Text>
                 <TextInput
                   style={styles.budgetInput}
                   value={tempBudget}
                   onChangeText={setTempBudget}
                   keyboardType="numeric"
-                  placeholder="e.g. 10000"
+                  placeholder={BUDGET_MODAL_CONFIG[activeBudgetType].placeholder}
                   placeholderTextColor="#94A3B8"
                   autoFocus
                 />
@@ -524,7 +568,7 @@ export default function SettingsScreen() {
                   <Text style={styles.cancelModalLabel}>Cancel</Text>
                 </TouchableOpacity>
                 <TouchableOpacity
-                  style={[styles.confirmLogoutBtn, { backgroundColor: '#F97316', flex: 1, marginLeft: 10 }]}
+                  style={[styles.confirmLogoutBtn, { backgroundColor: BUDGET_MODAL_CONFIG[activeBudgetType].btnColor, flex: 1, marginLeft: 10 }]}
                   onPress={handleUpdateBudget}
                   disabled={savingBudget}
                 >

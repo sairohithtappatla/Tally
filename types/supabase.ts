@@ -9,6 +9,9 @@ export interface Database {
           total_balance: number;
           monthly_spent: number;
           monthly_budget: number;
+          daily_budget: number | null;
+          weekly_budget: number | null;
+          push_token: string | null;
           currency: string;
           avatar_url: string | null;
           created_at: string;
@@ -21,6 +24,9 @@ export interface Database {
           total_balance?: number;
           monthly_spent?: number;
           monthly_budget?: number;
+          daily_budget?: number | null;
+          weekly_budget?: number | null;
+          push_token?: string | null;
           currency?: string;
           avatar_url?: string | null;
           created_at?: string;
@@ -33,6 +39,9 @@ export interface Database {
           total_balance?: number;
           monthly_spent?: number;
           monthly_budget?: number;
+          daily_budget?: number | null;
+          weekly_budget?: number | null;
+          push_token?: string | null;
           currency?: string;
           avatar_url?: string | null;
           created_at?: string;
