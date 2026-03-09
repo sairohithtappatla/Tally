@@ -3,7 +3,7 @@ import { Stack, useRouter, useSegments } from 'expo-router';
 import { StatusBar } from 'expo-status-bar';
 import 'react-native-reanimated';
 import { useEffect, useState } from 'react';
-import { AppState, View, Text, TouchableOpacity, StyleSheet } from 'react-native';
+import { View, Text, TouchableOpacity, StyleSheet } from 'react-native';
 import * as LocalAuthentication from 'expo-local-authentication';
 import { Ionicons } from '@expo/vector-icons';
 
@@ -64,23 +64,11 @@ function BiometricGuard({ children }: { children: React.ReactNode }) {
 
   useEffect(() => {
     // Only trigger fingerprint prompt if a user is logged in
+    // Since we removed the AppState listener, this only runs on a "Cold Start"
     if (user && !loading) {
       authenticate();
     }
   }, [user, loading]);
-
-  useEffect(() => {
-    const subscription = AppState.addEventListener('change', (nextAppState) => {
-      // Only lock if the user is logged in
-      if (user && (nextAppState === 'background' || nextAppState === 'inactive')) {
-        setIsUnlocked(false);
-      }
-    });
-
-    return () => {
-      subscription.remove();
-    };
-  }, [user]);
 
   // If there's no user logged in, bypass the lock screen entirely
   if (!user) {

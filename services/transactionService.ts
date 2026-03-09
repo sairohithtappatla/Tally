@@ -155,6 +155,27 @@ export const transactionService = {
   },
 
   /**
+   * Get transactions for CSV Export (Includes all necessary fields)
+   */
+  async getTransactionsForExport(userId: string, startDate: string, endDate: string) {
+    try {
+      const { data, error } = await supabase
+        .from('transactions')
+        .select('id, type, amount, category, merchant, date, time')
+        .eq('user_id', userId)
+        .gte('date', startDate)
+        .lte('date', endDate)
+        .order('date', { ascending: false });
+
+      if (error) throw error;
+      return data as Transaction[];
+    } catch (error) {
+      console.error('Fetch export transactions failed:', error);
+      throw error;
+    }
+  },
+
+  /**
    * Get transactions by date range (optimized)
    */
   async getTransactionsByDateRange(userId: string, startDate: string, endDate: string) {

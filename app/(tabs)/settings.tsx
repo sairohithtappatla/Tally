@@ -62,6 +62,11 @@ export default function SettingsScreen() {
   const [toastMessage, setToastMessage] = useState('');
   const [exporting, setExporting] = useState(false);
 
+  // -- Export State --
+  const [isExportModalVisible, setExportModalVisible] = useState(false);
+  const [exportStartDate, setExportStartDate] = useState('');
+  const [exportEndDate, setExportEndDate] = useState('');
+
   useEffect(() => {
     if (!user) return;
 
@@ -104,6 +109,20 @@ export default function SettingsScreen() {
     const current = type === 'monthly' ? monthlyBudget : type === 'daily' ? dailyBudget : weeklyBudget;
     setTempBudget(current != null && current > 0 ? String(current) : '');
     setBudgetModalVisible(true);
+  };
+
+  const openExportModal = () => {
+    const now = new Date();
+    // Local date generation to prevent timezone bugs
+    const firstDay = new Date(now.getFullYear(), now.getMonth(), 1);
+    const lastDay = new Date(now.getFullYear(), now.getMonth() + 1, 0);
+
+    const formatDate = (d: Date) =>
+      `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`;
+
+    setExportStartDate(formatDate(firstDay));
+    setExportEndDate(formatDate(lastDay));
+    setExportModalVisible(true);
   };
 
   const showToast = (msg: string) => {
@@ -255,14 +274,23 @@ export default function SettingsScreen() {
 
   const handleExportCSV = async () => {
     if (!user) return;
+    if (!exportStartDate || !exportEndDate) {
+      Alert.alert('Error', 'Please enter both start and end dates.');
+      return;
+    }
 
     try {
       setExporting(true);
-      // Fetch a large number of transactions (limit to 10k for safety)
-      const transactions = await transactionService.getTransactions(user.id, 10000);
+      // Fetch only the selected range using our new service method
+      const transactions = await transactionService.getTransactionsForExport(
+        user.id,
+        exportStartDate,
+        exportEndDate
+      );
 
       if (transactions.length === 0) {
-        Alert.alert('No Data', 'You have no transactions to export.');
+        Alert.alert('No Data', `No transactions found between ${exportStartDate} and ${exportEndDate}.`);
+        setExportModalVisible(false);
         return;
       }
 
@@ -271,21 +299,17 @@ export default function SettingsScreen() {
 
       // 2. Add Rows
       transactions.forEach((t) => {
-        // Escape commas and quotes in merchant names
         const safeMerchant = `"${t.merchant.replace(/"/g, '""')}"`;
         csvContent += `${t.date},${t.time || ''},${t.type},${t.category},${safeMerchant},${t.amount}\n`;
       });
 
       // 3. Define File Path
-      const now = new Date();
-      const localDate = `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, '0')}-${String(now.getDate()).padStart(2, '0')}`;
-      const fileName = `Tally_Export_${localDate}.csv`;
-      // Use the File constructor to safely join paths (handles slashes automatically)
-      const exportFile = new FileSystem.File(FileSystem.Paths.cache, fileName);
-      const fileUri = exportFile.uri;
+      const fileName = `Tally_Export_${exportStartDate}_to_${exportEndDate}.csv`;
+      // Ensure the slash is there for the new Expo FileSystem Paths API
+      const fileUri = FileSystem.Paths.cache.uri + '/' + fileName;
 
       // 4. Write and Share
-      await exportFile.write(csvContent);
+      await FileSystem.writeAsStringAsync(fileUri, csvContent);
 
       const isAvailable = await Sharing.isAvailableAsync();
       if (isAvailable) {
@@ -293,6 +317,7 @@ export default function SettingsScreen() {
           mimeType: 'text/csv',
           dialogTitle: 'Export Tally Transactions',
         });
+        setExportModalVisible(false);
       } else {
         Alert.alert('Error', 'Sharing is not available on this device');
       }
@@ -438,7 +463,7 @@ export default function SettingsScreen() {
           <Text style={styles.menuLabel}>Data Management</Text>
           <TouchableOpacity
             style={styles.menuItem}
-            onPress={handleExportCSV}
+            onPress={openExportModal}
             disabled={exporting}
           >
             <View style={[styles.iconBox, { backgroundColor: '#F0FDF4' }]}>
@@ -633,6 +658,58 @@ export default function SettingsScreen() {
                   disabled={savingBudget}
                 >
                   <Text style={styles.confirmLogoutLabel}>{savingBudget ? 'Saving...' : 'Save'}</Text>
+                </TouchableOpacity>
+              </View>
+            </Pressable>
+          </Pressable>
+        </KeyboardAvoidingView>
+      </Modal>
+
+      {/* Export Date Range Modal */}
+      <Modal visible={isExportModalVisible} transparent animationType="slide">
+        <KeyboardAvoidingView behavior={Platform.OS === 'ios' ? 'padding' : 'height'} style={{ flex: 1 }}>
+          <Pressable style={styles.modalOverlay} onPress={() => setExportModalVisible(false)}>
+            <Pressable style={[styles.modalContent, { width: '90%' }]} onPress={e => e.stopPropagation()}>
+              <View style={[styles.modalIconBox, { backgroundColor: '#F0FDF4' }]}>
+                <Ionicons name="calendar-outline" size={36} color="#16A34A" />
+              </View>
+              <Text style={styles.modalTitle}>Export Transactions</Text>
+              <Text style={styles.modalDescription}>
+                Select the date range to export your data as a CSV file.
+              </Text>
+
+              <View style={styles.inputGroup}>
+                <Text style={styles.inputLabel}>Start Date (YYYY-MM-DD)</Text>
+                <TextInput
+                  style={styles.input}
+                  value={exportStartDate}
+                  onChangeText={setExportStartDate}
+                  placeholder="2026-03-01"
+                  placeholderTextColor="#94A3B8"
+                />
+              </View>
+
+              <View style={styles.inputGroup}>
+                <Text style={styles.inputLabel}>End Date (YYYY-MM-DD)</Text>
+                <TextInput
+                  style={styles.input}
+                  value={exportEndDate}
+                  onChangeText={setExportEndDate}
+                  placeholder="2026-03-31"
+                  placeholderTextColor="#94A3B8"
+                />
+              </View>
+
+              <View style={[styles.modalButtons, { marginTop: 20 }]}>
+                <TouchableOpacity style={styles.cancelModalBtn} onPress={() => setExportModalVisible(false)}>
+                  <Text style={styles.cancelModalLabel}>Cancel</Text>
+                </TouchableOpacity>
+                <TouchableOpacity
+                  style={[styles.confirmLogoutBtn, { backgroundColor: '#16A34A', flex: 1, marginLeft: 10 }]}
+                  onPress={handleExportCSV}
+                  disabled={exporting}
+                >
+                  <Text style={styles.confirmLogoutLabel}>{exporting ? 'Exporting...' : 'Download CSV'}</Text>
                 </TouchableOpacity>
               </View>
             </Pressable>
@@ -1031,5 +1108,26 @@ const styles = StyleSheet.create({
     fontWeight: '600',
     color: '#0F172A',
     paddingVertical: 14,
+  },
+  inputGroup: {
+    width: '100%',
+    marginBottom: 16,
+  },
+  inputLabel: {
+    fontSize: 14,
+    fontWeight: '600',
+    color: '#64748B',
+    marginBottom: 8,
+  },
+  input: {
+    backgroundColor: '#F8FAFC',
+    borderWidth: 1.5,
+    borderColor: '#E2E8F0',
+    borderRadius: 16,
+    paddingHorizontal: 16,
+    paddingVertical: 12,
+    fontSize: 16,
+    color: '#0F172A',
+    fontWeight: '600',
   },
 });
